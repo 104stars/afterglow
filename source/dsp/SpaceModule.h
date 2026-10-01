@@ -77,6 +77,7 @@ private:
     OnePole damping[numLines], lowCut[numLines];
     FirstOrderAllpass dispersion[numLines][dispersionStages];
     float lineOut[numLines] {};
+    float lineMod[numLines] {};
 
     Allpass diffusers[2][numDiffusers];
     DelayBuffer preDelay[2];

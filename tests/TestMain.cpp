@@ -5,6 +5,7 @@
 #include "Parameters.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_dsp/juce_dsp.h>
 #include <chrono>
 #include <cstdio>
 #include <random>
@@ -419,6 +420,110 @@ void testSpaceLevels()
     }
 }
 
+void testWobblePitch()
+{
+    section ("Wobble pitch deviation (1 kHz sine, wow only)");
+
+    for (auto amount : { 25.0f, 50.0f, 100.0f })
+    {
+        auto proc = makeProcessor (48000.0, 256);
+        setAllModules (*proc, false);
+        setParam (*proc, ParamIDs::wobbleOn, 1.0f);
+        setParam (*proc, ParamIDs::wobbleAmount, amount);
+        setParam (*proc, ParamIDs::wobbleBalance, 0.0f);
+        setParam (*proc, ParamIDs::wobbleWowRate, 1.0f);
+        setParam (*proc, ParamIDs::wobbleFlux, 0.0f);
+        proc->prepareToPlay (48000.0, 256);
+
+        juce::AudioBuffer<float> b (2, 48000 * 6);
+        for (int i = 0; i < b.getNumSamples(); ++i)
+        {
+            const auto v = 0.5f * static_cast<float> (std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * i / 48000.0));
+            b.setSample (0, i, v);
+            b.setSample (1, i, v);
+        }
+        runProcessor (*proc, b, 256, false);
+
+        // Instantaneous frequency from zero-crossing intervals (after the start-up glide has settled).
+        std::vector<double> crossings;
+        const auto* d = b.getReadPointer (0);
+        for (int i = 48000 * 3; i < b.getNumSamples(); ++i)
+            if (d[i - 1] < 0.0f && d[i] >= 0.0f)
+                crossings.push_back (i - 1 + d[i - 1] / (d[i - 1] - d[i]));
+
+        double minF = 1.0e9, maxF = 0.0;
+        for (size_t k = 10; k + 10 < crossings.size(); k += 10)
+        {
+            const auto f = 10.0 * 48000.0 / (crossings[k + 10] - crossings[k]);
+            minF = std::min (minF, f);
+            maxF = std::max (maxF, f);
+        }
+
+        const auto expected = 3.0 * std::pow (amount / 100.0, 2.0); // percent, see WobbleModule::maxWowDeviation
+        const auto measured = 100.0 * (maxF - minF) / 2000.0;
+        std::printf ("  amount %3.0f%%: pitch swing +-%.2f %% (design target +-%.2f %%)\n", amount, measured, expected * 1.12);
+        check (measured > expected * 0.6 && measured < expected * 1.6, "wobble depth close to design: " + juce::String (amount));
+    }
+}
+
+void testOversamplingAliasing()
+{
+    section ("Distort aliasing vs oversampling (5 kHz sine, Clip at 80 %)");
+    constexpr int fftOrder = 15;
+    constexpr int size = 1 << fftOrder;
+    constexpr int bin = 3413; // about 5 kHz at 48 kHz, exactly on an FFT bin
+    double results[4] {};
+
+    for (int quality = 0; quality < 4; ++quality)
+    {
+        auto proc = makeProcessor (48000.0, 512);
+        setAllModules (*proc, false);
+        setParam (*proc, ParamIDs::distortOn, 1.0f);
+        setParam (*proc, ParamIDs::distortType, 5.0f);
+        setParam (*proc, ParamIDs::distortAmount, 80.0f);
+        setParam (*proc, ParamIDs::distortFlux, 0.0f);
+        setParam (*proc, ParamIDs::quality, static_cast<float> (quality));
+        proc->prepareToPlay (48000.0, 512);
+
+        juce::AudioBuffer<float> b (2, size * 2);
+        for (int i = 0; i < b.getNumSamples(); ++i)
+        {
+            const auto v = 0.4f * static_cast<float> (std::sin (2.0 * juce::MathConstants<double>::pi * bin * i / size));
+            b.setSample (0, i, v);
+            b.setSample (1, i, v);
+        }
+        runProcessor (*proc, b, 512, false);
+
+        std::vector<float> fftData (size * 2, 0.0f);
+        for (int i = 0; i < size; ++i)
+        {
+            const auto w = 0.5f - 0.5f * std::cos (2.0f * juce::MathConstants<float>::pi * static_cast<float> (i) / size);
+            fftData[static_cast<size_t> (i)] = b.getSample (0, size + i) * w;
+        }
+        juce::dsp::FFT fft (fftOrder);
+        fft.performFrequencyOnlyForwardTransform (fftData.data());
+
+        // Harmonics land on multiples of the bin; anything else above the noise is aliasing.
+        double harmonicEnergy = 0.0, aliasEnergy = 0.0;
+        std::vector<bool> isHarmonic (size / 2, false);
+        for (int h = 1; h * bin < size / 2; ++h)
+            for (int k = -4; k <= 4; ++k)
+                if (h * bin + k > 0 && h * bin + k < size / 2)
+                    isHarmonic[static_cast<size_t> (h * bin + k)] = true;
+
+        for (int k = 8; k < size / 2; ++k)
+        {
+            const auto e = static_cast<double> (fftData[static_cast<size_t> (k)]) * fftData[static_cast<size_t> (k)];
+            (isHarmonic[static_cast<size_t> (k)] ? harmonicEnergy : aliasEnergy) += e;
+        }
+
+        results[quality] = 10.0 * std::log10 (aliasEnergy / harmonicEnergy);
+        std::printf ("  quality %d: aliasing %.1f dB relative to the harmonics\n", quality, results[quality]);
+    }
+
+    check (results[2] < results[0] - 15.0, "4x oversampling reduces aliasing by at least 15 dB");
+}
+
 void testMono()
 {
     section ("Mono layout");
@@ -435,6 +540,28 @@ void testMono()
 void testBenchmark()
 {
     section ("CPU benchmark (48 kHz stereo, 512-sample blocks, 20 s of audio)");
+
+    {
+        const char* modules[] { ParamIDs::noiseOn, ParamIDs::wobbleOn, ParamIDs::distortOn, ParamIDs::digitalOn, ParamIDs::spaceOn, ParamIDs::magneticOn };
+        const char* amounts[] { ParamIDs::noiseAmount, ParamIDs::wobbleAmount, ParamIDs::distortAmount, ParamIDs::digitalAmount, ParamIDs::spaceAmount, ParamIDs::magneticAmount };
+
+        for (int m = -1; m < 6; ++m)
+        {
+            auto proc = makeProcessor (48000.0, 512);
+            setAllModules (*proc, false);
+            if (m >= 0)
+            {
+                setParam (*proc, modules[m], 1.0f);
+                setParam (*proc, amounts[m], 50.0f);
+            }
+            proc->prepareToPlay (48000.0, 512);
+            auto b = makeSignal (48000.0, 20.0);
+            const auto start = std::chrono::high_resolution_clock::now();
+            runProcessor (*proc, b, 512, false);
+            const auto seconds = std::chrono::duration<double> (std::chrono::high_resolution_clock::now() - start).count();
+            std::printf ("  %-18s alone: %6.2f%% of one core\n", m < 0 ? "(all off)" : modules[m], 100.0 * seconds / 20.0);
+        }
+    }
 
     for (auto presetName : { "Afterglow", "Lo-Fi Study Beats", "Cosmic Flux" })
     {
@@ -466,6 +593,8 @@ int main()
     testNoiseCalibration();
     testDistortLevels();
     testSpaceLevels();
+    testWobblePitch();
+    testOversamplingAliasing();
     testMono();
 
     if (juce::SystemStats::getEnvironmentVariable ("AFTERGLOW_BENCHMARK", "1") != "0")

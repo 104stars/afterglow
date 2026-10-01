@@ -201,21 +201,21 @@ float DistortModule::shape (int type, float x, ShaperState& s, float bias) noexc
             // Push-pull triode pair: soft, mostly odd, with power-supply sag and a little bias imbalance.
             const auto env = s.sag.process (x);
             const auto xs = x / (1.0f + 0.25f * env);
-            return std::tanh (xs + bias) - std::tanh (bias);
+            return fastTanh (xs + bias) - fastTanh (bias);
         }
         case transformer:
         {
             // Iron saturates first at low frequencies (core flux follows the integral of the voltage).
             const auto low = s.transformerLow.processLP (x);
             const auto high = x - low;
-            const auto satLow = (std::tanh (2.0f * low + bias) - std::tanh (bias)) * 0.5f;
-            return std::tanh (0.7f * (high + satLow)) / 0.7f;
+            const auto satLow = (fastTanh (2.0f * low + bias) - fastTanh (bias)) * 0.5f;
+            return fastTanh (0.7f * (high + satLow)) / 0.7f;
         }
         case speaker:
         {
             // A torn cone: asymmetric excursion limit, rattle on loud peaks and a narrow, honky response.
             auto v = s.speakerHighPass.processHP (x);
-            v = v > 0.0f ? 0.6f * std::tanh (v / 0.6f) : std::tanh (v);
+            v = v > 0.0f ? 0.6f * fastTanh (v / 0.6f) : fastTanh (v);
             const auto excess = std::max (0.0f, std::abs (v) - 0.35f);
             v += s.rattleBand.process (s.rng.nextBipolar()) * excess * 1.8f;
             v = s.speakerLowPass.process (s.speakerBell.process (v));
@@ -234,14 +234,14 @@ float DistortModule::shape (int type, float x, ShaperState& s, float bias) noexc
             const auto env = s.gate.process (x);
             const auto gate = std::clamp ((env - 0.03f) / 0.12f, 0.0f, 1.0f);
             const auto u = x + 0.3f * bias;
-            const auto y = u > 0.0f ? std::tanh (3.0f * u) : 0.75f * std::tanh (1.4f * u);
+            const auto y = u > 0.0f ? fastTanh (3.0f * u) : 0.75f * fastTanh (1.4f * u);
             return s.fuzzLowPass.processLP (y) * (0.25f + 0.75f * gate);
         }
         case clip:    return kneeClip (x);
         case fold:    return std::sin (0.5f * pi * (x + bias)) - std::sin (0.5f * pi * bias);
         case rectify:
         {
-            const auto t = std::tanh (x);
+            const auto t = fastTanh (x);
             return 0.45f * t + 0.9f * std::abs (t);
         }
         default: return x;
@@ -290,6 +290,7 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
         highSm.snapTo (std::log (p.focusHigh));
         engageSm.snapTo (engageTarget);
         makeupSm.snapTo (computeMakeup (p.type, dbToGain (driveSm.getCurrent()), 0.0f));
+        lastDrive = dbToGain (driveSm.getCurrent());
         primed = true;
     }
 
@@ -341,6 +342,10 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
         const auto focusShift = 0.35f * focusFlux.advance (len) * 2.3f; // up to about +-1/3 octave of drift
         updateFocus (std::exp (lowSm.skip (len) + focusShift), std::exp (highSm.skip (len) + focusShift));
 
+        // Drive is computed at control rate and interpolated, the dB conversion is too costly per sample.
+        const auto driveTarget = dbToGain (driveSm.skip (len) + 6.0f * driveFlux.advance (len));
+        const auto invLen = 1.0f / static_cast<float> (len);
+
         for (int i = start; i < start + len; ++i)
         {
             const auto mL = focusLow[0].process (focusHigh[0].process (left[i]));
@@ -350,12 +355,13 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
             bandDelay[0].push (mL);
             bandDelay[1].push (mR);
 
-            const auto driveDb = driveSm.next() + 6.0f * driveFlux.next();
-            const auto drive = dbToGain (driveDb);
+            const auto drive = lerp (lastDrive, driveTarget, static_cast<float> (i - start + 1) * invLen);
             bandL[i] = mL * drive;
             bandR[i] = mR * drive;
             levelSum += mL * mL + mR * mR;
         }
+
+        lastDrive = driveTarget;
     }
 
     // A slowly drifting bias adds even harmonics, like a warming-up circuit.

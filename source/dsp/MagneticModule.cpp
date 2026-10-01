@@ -190,6 +190,14 @@ void MagneticModule::process (float* left, float* right, int n, const MagneticPa
             ch.lowPass.setup (Svf::Type::lowPass, std::min (cutoff, 0.45f * static_cast<float> (fs)), 0.6f, 0.0f, fs);
 
             auto* d = io[c] + start;
+
+            if (ch.prevLoss <= 0.0f && ch.lossAmount <= 0.0f)
+            {
+                for (int i = 0; i < len; ++i)
+                    d[i] *= lerp (ch.prevGain, ch.gain, static_cast<float> (i + 1) * invLen);
+                continue;
+            }
+
             for (int i = 0; i < len; ++i)
             {
                 const auto t = static_cast<float> (i + 1) * invLen;

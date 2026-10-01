@@ -90,7 +90,8 @@ void AfterglowEngine::processChunk (float* left, float* right, int n, const Engi
 
     master.processInput (left, right, n);
 
-    noise.analyseInput (left, right, n);
+    if (p.noise.on && p.noise.amount > 0.0f)
+        noise.analyseInput (left, right, n);
     noise.render (n, p.noise, transport);
     if (! p.noise.post)
         noise.addTo (left, right, n);

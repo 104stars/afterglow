@@ -101,6 +101,7 @@ void SpaceModule::reset()
         damping[i].reset();
         lowCut[i].reset();
         lineOut[i] = 0.0f;
+        lineMod[i] = 0.0f;
         for (auto& d : dispersion[i])
             d.x1 = d.y1 = 0.0f;
     }
@@ -162,6 +163,7 @@ void SpaceModule::configureType (int type)
         damping[i].reset();
         lowCut[i].reset();
         lineOut[i] = 0.0f;
+        lineMod[i] = 0.0f;
     }
 
     static constexpr float diffusionRatios[numDiffusers] { 1.0f, 1.37f, 2.13f, 2.87f };
@@ -282,6 +284,20 @@ void SpaceModule::process (float* left, float* right, int n, const SpaceParams& 
         const auto norm = s.outputGain * std::pow (std::max (0.002f, 1.0f - meanGain2), s.normExponent) * 2.2f;
         const auto preSamples = std::clamp (preMs * 0.001f * sr, 0.0f, static_cast<float> (preDelay[0].capacity() - 4));
 
+        // Delay-line modulation is slow, so it is evaluated at control rate and interpolated per sample.
+        float modStart[numLines], modStep[numLines];
+        const auto invLen = 1.0f / static_cast<float> (len);
+        for (int l = 0; l < numLines; ++l)
+        {
+            modPhase[l] += modInc[l] * static_cast<float> (len);
+            modPhase[l] -= std::floor (modPhase[l]);
+            const auto wander = p.flux > 0.0f ? 0.5f * p.flux * lineWander[l].advance (len) : 0.0f;
+            const auto target = modDepth * fluxMod * (std::sin (modPhase[l] * twoPi) + wander);
+            modStart[l] = lineMod[l];
+            modStep[l] = (target - lineMod[l]) * invLen;
+            lineMod[l] = target;
+        }
+
         for (int i = start; i < start + len; ++i)
         {
             const auto amount = amountSm.next();
@@ -324,15 +340,11 @@ void SpaceModule::process (float* left, float* right, int n, const SpaceParams& 
 
             // Feedback delay network.
             float v[numLines];
+            const auto step = static_cast<float> (i - start + 1);
             for (int l = 0; l < numLines; ++l)
             {
-                modPhase[l] += modInc[l];
-                if (modPhase[l] >= 1.0f)
-                    modPhase[l] -= 1.0f;
-
-                const auto mod = modDepth * fluxMod * (std::sin (modPhase[l] * twoPi) + 0.5f * p.flux * lineWander[l].next());
-                const auto d = std::max (2.0f, lineLength[l] + mod);
-                auto o = lines[l].readHermite (d);
+                const auto d = std::max (2.0f, lineLength[l] + modStart[l] + modStep[l] * step);
+                auto o = lines[l].readLinear (d);
                 o = lowCut[l].processHP (damping[l].processLP (o));
 
                 if (currentType == spring)

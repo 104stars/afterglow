@@ -64,6 +64,7 @@ private:
     int currentType = 0, pendingType = -1;
     bool primed = false;
     float glow = 0.0f;
+    float lastDrive = 1.0f;
 };
 
 } // namespace afterglow::dsp

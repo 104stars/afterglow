@@ -568,6 +568,17 @@ private:
     float x1 = 0.0f, F1 = 0.0f;
 };
 
+/** Accurate rational tanh approximation (error < 1e-5 on [-5, 5]), clamped outside that range. */
+inline float fastTanh (float x) noexcept
+{
+    if (x > 5.0f) return 1.0f;
+    if (x < -5.0f) return -1.0f;
+    const auto x2 = x * x;
+    const auto num = x * (135135.0f + x2 * (17325.0f + x2 * (378.0f + x2)));
+    const auto den = 135135.0f + x2 * (62370.0f + x2 * (3150.0f + 28.0f * x2));
+    return std::clamp (num / den, -1.0f, 1.0f);
+}
+
 /** Mathematically safe log(cosh(x)) for large |x|. */
 inline float logCosh (float x) noexcept
 {

@@ -176,8 +176,7 @@ void DigitalModule::process (float* left, float* right, int n, const DigitalPara
             for (int c = 0; c < 2; ++c)
             {
                 m[c] = focusLow[c].process (focusHigh[c].process (x[c]));
-                const auto filtered = preFilter[c].process (m[c]);
-                pre[c] = lerp (m[c], filtered, smoothActive);
+                pre[c] = smoothActive > 0.0f ? lerp (m[c], preFilter[c].process (m[c]), smoothActive) : m[c];
             }
 
             // Sample-and-hold clock, with jitter when Flux is up.
@@ -193,8 +192,8 @@ void DigitalModule::process (float* left, float* right, int n, const DigitalPara
             for (int c = 0; c < 2; ++c)
             {
                 auto z = crush (c, held[c], bitBlend, levels, p.compand);
-                const auto post = postFilterB[c].process (postFilterA[c].process (z));
-                z = lerp (z, post, smoothActive);
+                if (smoothActive > 0.0f)
+                    z = lerp (z, postFilterB[c].process (postFilterA[c].process (z)), smoothActive);
                 out[c] = x[c] + g * (z - m[c] - cut * (x[c] - m[c]));
             }
 
