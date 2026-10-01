@@ -18,6 +18,16 @@ public:
     void reset();
     void process (float* left, float* right, int n, const SpaceParams& params) noexcept;
     void publish (EngineTelemetry& telemetry) const noexcept;
+    void setTelemetry (EngineTelemetry* t) noexcept { telemetry = t; }
+
+    /** Decay time (RT60, seconds) at the given Decay setting (0..1), without Flux. */
+    static float decaySeconds (int type, float decay) noexcept;
+
+    /** Range of the network's delay lines in ms: the time over which the tail builds up after the pre-delay. */
+    static void buildUpMs (int type, float& minMs, float& maxMs) noexcept;
+
+    /** Decay time at one frequency, after the in-loop damping that the type and the Focus band apply. */
+    static float decaySecondsAt (int type, float rt, float focusLowHz, float focusHighHz, float hz) noexcept;
 
 private:
     static constexpr int numLines = 16;
@@ -92,7 +102,17 @@ private:
     LinearRamp typeFade;
     int pendingType = -1;
     bool primed = false;
-    float energy = 0.0f;
+
+    // Display: wet level history, input onsets, the values in use and the resonator's level per note.
+    EngineTelemetry* telemetry = nullptr;
+    int wetWindow = 441, wetCount = 0;
+    float wetSum = 0.0f;
+    float onsetFast = 0.0f, onsetSlow = 0.0f;
+    int samplesSinceOnset = 0;
+    float lastRt = 1.0f, lastPreMs = 0.0f;
+    float noteSum[12] {};
+    int noteCount = 0;
+    float notes[12] {};
 };
 
 } // namespace afterglow::dsp

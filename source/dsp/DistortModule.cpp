@@ -59,6 +59,11 @@ float DistortModule::staticCurve (int type, float x, float bias) noexcept
     }
 }
 
+float DistortModule::baseBias (int type) noexcept
+{
+    return type == tube ? 0.08f : (type == fuzz ? 0.25f : (type == tape ? 0.04f : 0.0f));
+}
+
 int DistortModule::latencyForOrder (int order, double, int maxBlockSize)
 {
     if (order <= 0)
@@ -73,6 +78,7 @@ void DistortModule::prepare (double sampleRate, int maxBlockSize)
 {
     fs = sampleRate;
     maxBlock = maxBlockSize;
+    transferStep = std::max (1, static_cast<int> (std::lround (sampleRate / 12000.0)));
 
     for (int order = 1; order <= 3; ++order)
     {
@@ -139,7 +145,7 @@ void DistortModule::reset()
     typeFade.snapTo (1.0f);
     pendingType = -1;
     primed = false;
-    glow = 0.0f;
+    transferCounter = 0;
 }
 
 void DistortModule::setOversamplingOrder (int order) noexcept
@@ -326,7 +332,6 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
             right[i] = dryDelay[1].read (delayRead);
         }
 
-        glow = 0.0f;
         return;
     }
 
@@ -334,7 +339,6 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
     auto* bandR = bandBuffer.getWritePointer (1);
 
     // 1) Isolate the focus band, remember dry and band for the latency-matched recombination, apply drive.
-    auto levelSum = 0.0f;
 
     for (int start = 0; start < n; start += controlInterval)
     {
@@ -358,15 +362,14 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
             const auto drive = lerp (lastDrive, driveTarget, static_cast<float> (i - start + 1) * invLen);
             bandL[i] = mL * drive;
             bandR[i] = mR * drive;
-            levelSum += mL * mL + mR * mR;
         }
 
         lastDrive = driveTarget;
     }
 
     // A slowly drifting bias adds even harmonics, like a warming-up circuit.
-    const auto baseBias = currentType == tube ? 0.08f : (currentType == fuzz ? 0.25f : (currentType == tape ? 0.04f : 0.0f));
-    const auto bias = baseBias + 0.3f * biasFlux.advance (n);
+    const auto bias = baseBias (currentType) + 0.3f * biasFlux.advance (n);
+    lastBias = bias;
 
     // 2) Non-linear stage, oversampled.
     juce::dsp::AudioBlock<float> block (bandBuffer.getArrayOfWritePointers(), 2, static_cast<size_t> (n));
@@ -429,17 +432,20 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
             const auto bR = bandDelay[1].read (back);
             left[i] = dryDelay[0].read (back) + g * (yL - bL);
             right[i] = dryDelay[1].read (back) + g * (yR - bR);
+
+            // Display: what the shaper received (the latency-aligned band times the drive) and what it returned.
+            if (telemetry != nullptr && ++transferCounter >= transferStep)
+            {
+                transferCounter = 0;
+                telemetry->distortTransfer.push ({ bL * lastDrive, bandL[i] });
+            }
         }
     }
-
-    const auto rms = std::sqrt (levelSum / static_cast<float> (std::max (1, 2 * n)));
-    glow = engageSm.getCurrent() * clamp01 (driveSm.getCurrent() / maxDriveDb (currentType) * 1.4f)
-         * clamp01 (0.35f + 2.5f * rms);
 }
 
-void DistortModule::publish (EngineTelemetry& telemetry) const noexcept
+void DistortModule::publish (EngineTelemetry& t) const noexcept
 {
-    telemetry.distortDrive.store (glow, std::memory_order_relaxed);
+    t.distortBias.store (lastBias, std::memory_order_relaxed);
 }
 
 } // namespace afterglow::dsp

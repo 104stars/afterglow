@@ -1,73 +1,89 @@
 #include "Visualisers.h"
 #include "../Parameters.h"
+#include "../dsp/DistortModule.h"
+#include "../dsp/MagneticModule.h"
+#include "../dsp/SpaceModule.h"
 
 namespace afterglow::ui
 {
 namespace
 {
-    // One display language for all six screens:
-    //  - primary traces: 1.2 px with glow (strokeGlow)
-    //  - secondary/reference traces: 0.9 px, 55 % alpha, no outer halo (strokeSecondary)
-    //  - artwork outlines: 1.0 px without glow
-    //  - trace screens share one graticule; artwork screens (Distort, Magnetic) stay clean
-    //  - every screen has one small readout chip; off screens keep their static layer at 30 %
-    constexpr float primaryWidth = 1.2f;
-    constexpr float secondaryWidth = 0.9f;
-
-    void strokeGlow (juce::Graphics& g, const juce::Path& path, juce::Colour colour, float intensity, float width = primaryWidth)
-    {
-        g.setColour (colour.withAlpha (0.09f * intensity));
-        g.strokePath (path, juce::PathStrokeType (width * 4.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.setColour (colour.withAlpha (0.26f * intensity));
-        g.strokePath (path, juce::PathStrokeType (width * 2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.setColour (colour.withAlpha (0.95f * intensity));
-        g.strokePath (path, juce::PathStrokeType (width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    }
-
-    void strokeSecondary (juce::Graphics& g, const juce::Path& path, juce::Colour colour, float intensity)
-    {
-        g.setColour (colour.withAlpha (0.18f * intensity));
-        g.strokePath (path, juce::PathStrokeType (secondaryWidth * 2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.setColour (colour.withAlpha (0.55f * intensity));
-        g.strokePath (path, juce::PathStrokeType (secondaryWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    }
-
-    void strokeOutline (juce::Graphics& g, const juce::Path& path, juce::Colour colour, float alpha)
-    {
-        g.setColour (colour.withAlpha (alpha));
-        g.strokePath (path, juce::PathStrokeType (1.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    }
-
-    void drawGraticule (juce::Graphics& g, juce::Rectangle<float> screen, juce::Colour colour, float strength)
-    {
-        g.setColour (colour.withAlpha (0.07f * strength));
-        for (int i = 1; i < 6; ++i)
-            g.drawVerticalLine (juce::roundToInt (screen.getX() + screen.getWidth() * static_cast<float> (i) / 6.0f), screen.getY(), screen.getBottom());
-        for (int i = 1; i < 4; ++i)
-            g.drawHorizontalLine (juce::roundToInt (screen.getY() + screen.getHeight() * static_cast<float> (i) / 4.0f), screen.getX(), screen.getRight());
-
-        // Centre line with minor ticks, like an oscilloscope graticule.
-        const auto cy = screen.getCentreY();
-        g.setColour (colour.withAlpha (0.12f * strength));
-        g.drawHorizontalLine (juce::roundToInt (cy), screen.getX(), screen.getRight());
-        g.setColour (colour.withAlpha (0.10f * strength));
-        for (int i = 1; i < 24; ++i)
-        {
-            const auto x = screen.getX() + screen.getWidth() * static_cast<float> (i) / 24.0f;
-            g.drawLine (x, cy - 1.0f, x, cy + 1.0f, 1.0f);
-        }
-    }
-
     float approach (float current, float target, float seconds, float timeConstant)
     {
         return target + (current - target) * std::exp (-seconds / std::max (0.001f, timeConstant));
     }
 
-    juce::String rateText (float hz)
+    float smoothstep (float edge0, float edge1, float x)
     {
-        return juce::String (hz, hz < 1.0f ? 2 : 1) + "Hz";
+        const auto t = juce::jlimit (0.0f, 1.0f, (x - edge0) / (edge1 - edge0));
+        return t * t * (3.0f - 2.0f * t);
     }
+
+    /** How many of the newest entries of a telemetry ring to read (never more than half the ring, so the
+        writer cannot overwrite them while they are read), and the running index of the oldest of them. */
+    template <typename Ring>
+    int newestEntries (const Ring& ring, int maxCount, uint32_t& first) noexcept
+    {
+        const auto written = ring.written.load (std::memory_order_acquire);
+        const auto limit = static_cast<uint32_t> (std::min (maxCount, Ring::size / 2));
+        const auto count = std::min (written, limit);
+        first = written - count;
+        return static_cast<int> (count);
+    }
+
+    /** A closed band between an upper and a lower edge (both left to right). */
+    juce::Path bandPath (const std::vector<juce::Point<float>>& upper, const std::vector<juce::Point<float>>& lower)
+    {
+        juce::Path band;
+        if (upper.size() < 2 || upper.size() != lower.size())
+            return band;
+
+        band.startNewSubPath (upper.front());
+        for (size_t i = 1; i < upper.size(); ++i)
+            band.lineTo (upper[i]);
+        for (size_t i = lower.size(); i-- > 0;)
+            band.lineTo (lower[i]);
+        band.closeSubPath();
+        return band;
+    }
+
+    float gainToDb (float gain) { return juce::Decibels::gainToDecibels (gain, -120.0f); }
 } // namespace
+
+//======================================================================================================================
+void ModuleDisplay::Canvas::hLine (float x0, float x1, float y, juce::Colour colour) const
+{
+    g.setColour (colour);
+    g.fillRect (juce::Rectangle<float> (x0 * scale, std::floor (y * scale), (x1 - x0) * scale, 1.0f));
+}
+
+void ModuleDisplay::Canvas::vLine (float x, float y0, float y1, juce::Colour colour) const
+{
+    g.setColour (colour);
+    g.fillRect (juce::Rectangle<float> (std::floor (x * scale), y0 * scale, 1.0f, (y1 - y0) * scale));
+}
+
+void ModuleDisplay::Canvas::stroke (const juce::Path& path, float width, juce::Colour colour) const
+{
+    g.setColour (colour);
+    g.strokePath (path, juce::PathStrokeType (width * scale, juce::PathStrokeType::curved, juce::PathStrokeType::rounded),
+                  juce::AffineTransform::scale (scale));
+}
+
+void ModuleDisplay::Canvas::dashed (const juce::Path& path, float width, float dash, juce::Colour colour) const
+{
+    juce::Path dashes;
+    const float pattern[] { dash * scale, dash * scale };
+    juce::PathStrokeType (width * scale).createDashedStroke (dashes, path, pattern, 2, juce::AffineTransform::scale (scale));
+    g.setColour (colour);
+    g.fillPath (dashes);
+}
+
+void ModuleDisplay::Canvas::fill (const juce::Path& path, juce::Colour colour) const
+{
+    g.setColour (colour);
+    g.fillPath (path, juce::AffineTransform::scale (scale));
+}
 
 //======================================================================================================================
 ModuleDisplay::ModuleDisplay (juce::AudioProcessorValueTreeState& s, dsp::EngineTelemetry& t, int moduleIndex, const juce::String& onParamId)
@@ -86,320 +102,515 @@ float ModuleDisplay::param (const char* id) const
 
 bool ModuleDisplay::isActive() const { return onParam == nullptr || onParam->load (std::memory_order_relaxed) > 0.5f; }
 
-float ModuleDisplay::staticAlpha() const noexcept { return 0.3f + 0.7f * activity; }
+void ModuleDisplay::watchData (uint32_t written) noexcept
+{
+    if (written != lastWritten)
+    {
+        lastWritten = written;
+        staleSeconds = 0.0;
+    }
+}
+
+float ModuleDisplay::liveIntensity() const noexcept
+{
+    // When the host stops calling the audio engine, the last picture fades instead of freezing.
+    const auto fresh = staleSeconds < 0.1 ? 1.0f : static_cast<float> (std::exp (-(staleSeconds - 0.1) / 0.25));
+    return activity * fresh;
+}
 
 void ModuleDisplay::tick (double seconds)
 {
-    time += seconds;
+    staleSeconds += seconds;
     activity = approach (activity, isActive() ? 1.0f : 0.0f, static_cast<float> (seconds), 0.12f);
     repaint();
 }
 
-void ModuleDisplay::drawReadout (juce::Graphics& g, juce::Rectangle<float> screen)
+void ModuleDisplay::resized()
 {
-    const auto text = readoutText();
-    if (text.isEmpty() || activity < 0.02f)
-        return;
+    housingScale = 0.0f;
+    staticValid = false;
+}
 
-    const auto font = Fonts::get().display (9.5f);
-    const auto w = juce::GlyphArrangement::getStringWidth (font, text) + 6.0f;
-    const auto inner = screen.reduced (4.0f, 3.0f);
-    auto chip = juce::Rectangle<float> (w, 12.0f);
-    switch (readoutPlace())
+void ModuleDisplay::rebuildHousing (float scale)
+{
+    housingScale = scale;
+    const auto area = getLocalBounds().toFloat();
+    const auto screen = area.reduced (4.0f);
+    const auto w = std::max (1, juce::roundToInt (area.getWidth() * scale));
+    const auto h = std::max (1, juce::roundToInt (area.getHeight() * scale));
+
+    // Under the content: the bezel and the unlit filter glass, tinted by the module's own filter colour.
+    housingUnder = juce::Image (juce::Image::ARGB, w, h, true);
     {
-        case ReadoutPlace::centre:   chip = chip.withCentre ({ screen.getCentreX(), screen.getY() + screen.getHeight() * 0.42f }); break;
-        case ReadoutPlace::topRight: chip = chip.withPosition (inner.getRight() - w, inner.getY()); break;
-        case ReadoutPlace::bottomRight:
-        default:                     chip = chip.withPosition (inner.getRight() - w, inner.getBottom() - 12.0f); break;
+        juce::Graphics g (housingUnder);
+        g.addTransform (juce::AffineTransform::scale (scale));
+
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.fillRoundedRectangle (area.withTrimmedBottom (1.5f).translated (0.0f, 1.5f), 6.0f);
+        juce::ColourGradient bezel (juce::Colour (0xff1d1e21), area.getX(), area.getY(), juce::Colour (0xff0c0c0d), area.getX(), area.getBottom(), false);
+        g.setGradientFill (bezel);
+        g.fillRoundedRectangle (area.withTrimmedBottom (1.0f), 6.0f);
+
+        // Light catching the lower lip of the bezel.
+        g.setColour (juce::Colours::white.withAlpha (0.09f));
+        g.fillRect (juce::Rectangle<float> (area.getX() + 6.0f, area.getBottom() - 1.0f - 1.0f / scale, area.getWidth() - 12.0f, 1.0f / scale));
+
+        g.setColour (juce::Colour (0xff0b0b0a).interpolatedWith (phosphor, 0.055f));
+        g.fillRoundedRectangle (screen, 3.0f);
     }
 
-    g.setColour (juce::Colours::black.withAlpha (0.6f * activity));
-    g.fillRoundedRectangle (chip, 2.0f);
-    g.setColour (readoutColour().withAlpha (0.85f * activity));
-    g.setFont (font);
-    g.drawText (text, chip, juce::Justification::centred, false);
+    // Over the content: the glass itself, a short shadow under the top edge of the bezel and one soft sheen.
+    housingOver = juce::Image (juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g (housingOver);
+        g.addTransform (juce::AffineTransform::scale (scale));
+        juce::Path glass;
+        glass.addRoundedRectangle (screen, 3.0f);
+        g.reduceClipRegion (glass);
+
+        juce::ColourGradient shadow (juce::Colours::black.withAlpha (0.55f), 0.0f, screen.getY(), juce::Colours::transparentBlack, 0.0f, screen.getY() + 4.0f, false);
+        shadow.addColour (0.35, juce::Colours::black.withAlpha (0.2f));
+        g.setGradientFill (shadow);
+        g.fillRect (screen.withHeight (4.0f));
+
+        juce::ColourGradient sheen (juce::Colours::white.withAlpha (0.045f), 0.0f, screen.getY(), juce::Colours::white.withAlpha (0.0f), 0.0f, screen.getY() + screen.getHeight() * 0.45f, false);
+        g.setGradientFill (sheen);
+        g.fillRect (screen);
+    }
 }
 
 void ModuleDisplay::paint (juce::Graphics& g)
 {
+    const auto scale = juce::jlimit (0.25f, 8.0f, g.getInternalContext().getPhysicalPixelScaleFactor());
     const auto area = getLocalBounds().toFloat();
-
-    // Bezel.
-    g.setColour (juce::Colours::black.withAlpha (0.55f));
-    g.fillRoundedRectangle (area.translated (0.0f, 1.5f), 6.0f);
-    juce::ColourGradient bezel (juce::Colour (0xff45474b), area.getX(), area.getY(), juce::Colour (0xff111214), area.getX(), area.getBottom(), false);
-    g.setGradientFill (bezel);
-    g.fillRoundedRectangle (area, 6.0f);
-    g.setColour (juce::Colours::white.withAlpha (0.12f));
-    g.drawLine (area.getX() + 6.0f, area.getY() + 0.8f, area.getRight() - 6.0f, area.getY() + 0.8f, 1.0f);
-
     const auto screen = area.reduced (4.0f);
-    g.setColour (juce::Colour (0xff050706));
-    g.fillRoundedRectangle (screen, 4.0f);
 
-    // Faint phosphor bloom behind the content.
-    juce::ColourGradient bloom (phosphor.withAlpha (0.10f * activity), screen.getCentreX(), screen.getCentreY(),
-                                phosphor.withAlpha (0.0f), screen.getX(), screen.getY(), true);
-    g.setGradientFill (bloom);
-    g.fillRoundedRectangle (screen, 4.0f);
+    if (! housingUnder.isValid() || ! juce::approximatelyEqual (scale, housingScale))
+        rebuildHousing (scale);
 
-    juce::Path clip;
-    clip.addRoundedRectangle (screen, 4.0f);
+    g.drawImage (housingUnder, area, juce::RectanglePlacement::stretchToFit);
+
+    const auto key = staticKey();
+    if (! staticValid || key != cachedStaticKey || ! juce::approximatelyEqual (scale, staticScale))
+    {
+        staticLayer = juce::Image (juce::Image::ARGB, std::max (1, juce::roundToInt (screen.getWidth() * scale)),
+                                   std::max (1, juce::roundToInt (screen.getHeight() * scale)), true);
+        juce::Graphics sg (staticLayer);
+        drawStatic (Canvas { sg, scale });
+        cachedStaticKey = key;
+        staticScale = scale;
+        staticValid = true;
+    }
 
     {
         juce::Graphics::ScopedSaveState save (g);
-        g.reduceClipRegion (clip);
-        drawContent (g, screen);
+        juce::Path glass;
+        glass.addRoundedRectangle (screen, 3.0f);
+        g.reduceClipRegion (glass);
 
-        // Scanlines.
-        g.setColour (juce::Colours::black.withAlpha (0.16f));
-        for (auto y = screen.getY() + 1.0f; y < screen.getBottom(); y += 2.0f)
-            g.drawHorizontalLine (juce::roundToInt (y), screen.getX(), screen.getRight());
+        g.setOpacity (0.3f + 0.7f * activity);
+        g.drawImage (staticLayer, screen, juce::RectanglePlacement::stretchToFit);
+        g.setOpacity (1.0f);
 
-        // The readout sits above the scanlines so it stays crisp.
-        drawReadout (g, screen);
+        g.addTransform (juce::AffineTransform::translation (screen.getX(), screen.getY()));
+        drawLive (g);
+
+        // The one readout slot: top-right, set on the emitter itself. Hidden where it would be too small to read.
+        const auto text = readoutText();
+        if (text.isNotEmpty() && scale >= 0.75f && activity > 0.02f)
+        {
+            g.setFont (Fonts::get().display (10.5f));
+            g.setColour (phosphor.withAlpha (0.78f * activity));
+            g.drawText (text, juce::Rectangle<float> (4.0f, 1.5f, screenWidth - 8.0f, 11.0f), juce::Justification::centredRight, false);
+        }
     }
 
-    // Glass: inner shadow and a diagonal reflection.
-    juce::ColourGradient innerShadow (juce::Colours::black.withAlpha (0.7f), screen.getX(), screen.getY(), juce::Colours::transparentBlack, screen.getX(), screen.getY() + 6.0f, false);
-    g.setGradientFill (innerShadow);
-    g.fillRoundedRectangle (screen, 4.0f);
+    g.drawImage (housingOver, area, juce::RectanglePlacement::stretchToFit);
+}
 
-    juce::Path reflection;
-    reflection.startNewSubPath (screen.getX(), screen.getY());
-    reflection.lineTo (screen.getX() + screen.getWidth() * 0.62f, screen.getY());
-    reflection.lineTo (screen.getX() + screen.getWidth() * 0.38f, screen.getBottom());
-    reflection.lineTo (screen.getX(), screen.getBottom());
-    reflection.closeSubPath();
-    juce::Graphics::ScopedSaveState save (g);
-    g.reduceClipRegion (clip);
-    juce::ColourGradient glass (juce::Colours::white.withAlpha (0.07f), screen.getX(), screen.getY(), juce::Colours::white.withAlpha (0.0f),
-                                screen.getX() + screen.getWidth() * 0.5f, screen.getBottom(), false);
-    g.setGradientFill (glass);
-    g.fillPath (reflection);
+void ModuleDisplay::setAgedFill (juce::Graphics& g, juce::Colour colour, float alpha, float xOld, float xNew) const
+{
+    if (xNew - xOld < 1.0f)
+    {
+        g.setColour (colour.withAlpha (juce::jlimit (0.0f, 1.0f, alpha)));
+        return;
+    }
+
+    // Afterglow: the oldest data has faded to 40 % of the newest.
+    g.setGradientFill (juce::ColourGradient (colour.withAlpha (juce::jlimit (0.0f, 1.0f, alpha * 0.4f)), xOld, 0.0f,
+                                             colour.withAlpha (juce::jlimit (0.0f, 1.0f, alpha)), xNew, 0.0f, false));
+}
+
+void ModuleDisplay::drawBeam (juce::Graphics& g, const juce::Point<float>* points, int count, juce::Colour colour, float intensity, const Beam& beam) const
+{
+    if (count < 2 || intensity < 0.004f)
+        return;
+
+    // Brightness follows dwell: a segment drawn slowly (short) is bright, a fast edge (long) is dim, like a real
+    // beam. Four brightness steps keep it to a handful of paths per frame.
+    static constexpr float levels[] { 0.22f, 0.45f, 0.75f, 1.0f };
+    juce::Path paths[4], whole;
+    auto current = -1;
+    whole.startNewSubPath (points[0]);
+
+    for (int i = 1; i < count; ++i)
+    {
+        const auto length = points[i].getDistanceFrom (points[i - 1]);
+        const auto dwell = juce::jlimit (beam.floor, 1.0f, beam.reference / std::max (0.001f, length));
+        const auto bucket = dwell < 0.33f ? 0 : (dwell < 0.6f ? 1 : (dwell < 0.88f ? 2 : 3));
+        if (bucket != current)
+        {
+            paths[bucket].startNewSubPath (points[i - 1]);
+            current = bucket;
+        }
+        paths[bucket].lineTo (points[i]);
+        whole.lineTo (points[i]);
+    }
+
+    if (beam.halo)
+    {
+        setAgedFill (g, colour, 0.10f * intensity, beam.xOld, beam.xNew);
+        g.strokePath (whole, juce::PathStrokeType (beam.width * 2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
+    for (int b = 0; b < 4; ++b)
+    {
+        if (paths[b].isEmpty())
+            continue;
+        setAgedFill (g, colour, levels[b] * intensity, beam.xOld, beam.xNew);
+        g.strokePath (paths[b], juce::PathStrokeType (beam.width, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
+    }
+}
+
+void ModuleDisplay::drawEdgePen (juce::Graphics& g, float y, float alpha) const
+{
+    // A small solid triangle at the right edge, pointing at the newest value, like a chart recorder's pen.
+    juce::Path pen;
+    pen.addTriangle (screenWidth, y - 2.3f, screenWidth - 3.2f, y, screenWidth, y + 2.3f);
+    g.setColour (phosphor.withAlpha (juce::jlimit (0.0f, 1.0f, alpha)));
+    g.fillPath (pen);
 }
 
 //======================================================================================================================
+namespace
+{
+    // NOISE geometry: 120 columns (3 s), newest at the right. The envelope (each window's peaks) is drawn on a fixed
+    // decibel law from -72 dBFS (the centre line) to -6 dBFS (the edge), so a -50 dBFS bed is visible and louder noise
+    // is taller. Inside it, the body (+-1 standard deviation) is drawn in proportion to the peak, so the crest factor
+    // shows: hiss is a thin bright core with dim fringes, hum a full band, crackle a thin core under tall spikes.
+    constexpr float noiseLeft = 4.0f, noiseRight = 128.0f, noiseCentre = 25.0f, noiseHalf = 21.5f;
+    constexpr float noiseFloorDb = -72.0f, noiseFullDb = -6.0f;
+    constexpr int noiseColumns = 120;
+
+    float noiseHeight (float magnitude)
+    {
+        const auto db = juce::Decibels::gainToDecibels (magnitude, noiseFloorDb);
+        return noiseHalf * juce::jlimit (0.0f, 1.0f, (db - noiseFloorDb) / (noiseFullDb - noiseFloorDb));
+    }
+} // namespace
+
 NoiseDisplay::NoiseDisplay (juce::AudioProcessorValueTreeState& s, dsp::EngineTelemetry& t)
     : ModuleDisplay (s, t, 0, ParamIDs::noiseOn) {}
 
 void NoiseDisplay::tick (double seconds)
 {
-    const auto write = telemetry.noiseScopeWrite.load (std::memory_order_relaxed);
-    for (size_t i = 0; i < trace.size(); ++i)
-    {
-        const auto idx = (write - static_cast<int> (trace.size()) + static_cast<int> (i) + dsp::EngineTelemetry::scopeSize) % dsp::EngineTelemetry::scopeSize;
-        trace[i] = telemetry.noiseScope[static_cast<size_t> (idx)].load (std::memory_order_relaxed);
-    }
-
-    // Display high-pass: subtract a short moving average. Vinyl rumble and hum are far slower than the 20 ms window
-    // and would otherwise drag the trace off the centre line and swallow the hiss and crackle in the normalisation.
-    constexpr int halfWindow = 8;
-    const auto n = static_cast<int> (trace.size());
-    decltype (trace) smooth {};
-    for (int i = 0; i < n; ++i)
-    {
-        const auto lo = std::max (0, i - halfWindow), hi = std::min (n - 1, i + halfWindow);
-        auto acc = 0.0f;
-        for (int j = lo; j <= hi; ++j)
-            acc += trace[static_cast<size_t> (j)];
-        smooth[static_cast<size_t> (i)] = acc / static_cast<float> (hi - lo + 1);
-    }
-    auto sumSquares = 0.0f;
-    for (size_t i = 0; i < trace.size(); ++i)
-    {
-        trace[i] -= smooth[i];
-        sumSquares += trace[i] * trace[i];
-    }
-
-    // Normalise to RMS (not peak) so sparse crackle still shows its body; the knob sets how big it looks.
-    const auto rms = std::sqrt (sumSquares / static_cast<float> (trace.size()));
-    const auto amount = param (ParamIDs::noiseAmount) * 0.01f;
-    const auto target = rms > 1.0e-6f ? juce::jlimit (0.0f, 2000.0f, (0.08f + 0.12f * amount) / rms) : 0.0f;
-    gain = approach (gain, target, static_cast<float> (seconds), target < gain ? 0.08f : 0.3f);
-
-    const auto level = telemetry.noiseLevel.load (std::memory_order_relaxed);
-    levelDb = approach (levelDb, juce::Decibels::gainToDecibels (level, -90.0f), static_cast<float> (seconds), 0.25f);
+    watchData (telemetry.noiseEnvelope.written.load (std::memory_order_relaxed));
     ModuleDisplay::tick (seconds);
 }
 
-juce::String NoiseDisplay::readoutText() const
+void NoiseDisplay::drawStatic (const Canvas& c)
 {
-    return levelDb <= -89.0f ? juce::String ("--dB") : juce::String (juce::roundToInt (levelDb)) + "dB";
+    c.hLine (0.0f, screenWidth, noiseCentre, phosphor.withAlpha (0.10f));
 }
 
-void NoiseDisplay::drawContent (juce::Graphics& g, juce::Rectangle<float> screen)
+void NoiseDisplay::drawLive (juce::Graphics& g)
 {
-    drawGraticule (g, screen, phosphor, staticAlpha());
-    if (activity < 0.01f)
+    const auto intensity = liveIntensity();
+    uint32_t first = 0;
+    const auto count = newestEntries (telemetry.noiseEnvelope, noiseColumns, first);
+    if (count < 2 || intensity < 0.004f)
         return;
 
-    juce::Path path;
-    const auto n = static_cast<int> (trace.size());
-    for (int i = 0; i < n; ++i)
+    const auto& ring = telemetry.noiseEnvelope;
+    const auto pitch = (noiseRight - noiseLeft) / static_cast<float> (noiseColumns - 1);
+    std::vector<juce::Point<float>> outerTop, outerBottom, bodyTop, bodyBottom;
+
+    for (int k = 0; k < count; ++k)
     {
-        const auto x = screen.getX() + screen.getWidth() * static_cast<float> (i) / static_cast<float> (n - 1);
-        // Soft limiter instead of a hard clip, so peaks round off inside the glass.
-        const auto v = 0.40f * std::tanh (trace[static_cast<size_t> (i)] * gain / 0.40f);
-        const auto y = screen.getCentreY() - v * screen.getHeight();
-        if (i == 0)
-            path.startNewSubPath (x, y);
-        else
-            path.lineTo (x, y);
+        const auto entry = first + static_cast<uint32_t> (k);
+        const auto x = noiseRight - static_cast<float> (count - 1 - k) * pitch;
+        const auto lo = ring.get (entry, 0), hi = ring.get (entry, 1), mean = ring.get (entry, 2), rms = ring.get (entry, 3);
+        const auto sd = std::sqrt (std::max (0.0f, rms * rms - mean * mean));
+        const auto peak = std::max ({ std::abs (lo), std::abs (hi), 1.0e-9f });
+        const auto up = noiseHeight (std::max (0.0f, hi));
+        const auto down = noiseHeight (std::max (0.0f, -lo));
+        const auto body = noiseHeight (peak) * std::min (1.0f, sd / peak);
+
+        outerTop.push_back ({ x, noiseCentre - up });
+        outerBottom.push_back ({ x, noiseCentre + down });
+        bodyTop.push_back ({ x, noiseCentre - body });
+        bodyBottom.push_back ({ x, noiseCentre + body });
     }
 
-    strokeGlow (g, path, phosphor, activity);
+    // A slow-sweep scope draws noise as a dense, bright body with dim, spiky fringes.
+    setAgedFill (g, phosphor, 0.24f * intensity, noiseLeft, noiseRight);
+    g.fillPath (bandPath (outerTop, outerBottom));
+    setAgedFill (g, phosphor, 0.50f * intensity, noiseLeft, noiseRight);
+    g.fillPath (bandPath (bodyTop, bodyBottom));
 }
 
 //======================================================================================================================
+namespace
+{
+    // WOBBLE geometry: 4 s of pitch deviation, newest at the right. The cents scale is fixed and linear for small
+    // deviations, then gently compresses (20 tanh(c / 24) px), so a subtle 5 cent wow and a 50 cent warp both read.
+    constexpr float wobbleLeft = 4.0f, wobbleRight = 126.0f, wobbleCentre = 25.0f;
+    constexpr int wobbleColumns = 128;
+
+    float wobbleY (float cents) { return wobbleCentre - 20.0f * std::tanh (cents / 24.0f); }
+} // namespace
+
 WobbleDisplay::WobbleDisplay (juce::AudioProcessorValueTreeState& s, dsp::EngineTelemetry& t)
     : ModuleDisplay (s, t, 1, ParamIDs::wobbleOn) {}
 
 void WobbleDisplay::tick (double seconds)
 {
-    const auto synced = param (ParamIDs::wobbleSync) > 0.5f;
-    const auto wowHz = synced ? 2.0 / syncDivisionInBeats (juce::roundToInt (param (ParamIDs::wobbleDivision))) : static_cast<double> (param (ParamIDs::wobbleWowRate));
-    wowPhase += seconds * std::min (wowHz, 4.0) * 0.6;
-    flutterPhase += seconds * std::min (static_cast<double> (param (ParamIDs::wobbleFlutterRate)), 30.0) * 0.12;
+    watchData (telemetry.wobblePitch.written.load (std::memory_order_relaxed));
     ModuleDisplay::tick (seconds);
 }
 
-juce::String WobbleDisplay::readoutText() const
+void WobbleDisplay::drawStatic (const Canvas& c)
 {
-    if (param (ParamIDs::wobbleSync) > 0.5f)
-        return syncDivisionNames()[juce::roundToInt (param (ParamIDs::wobbleDivision))];
-    return rateText (param (ParamIDs::wobbleWowRate));
+    c.hLine (0.0f, screenWidth, wobbleCentre, phosphor.withAlpha (0.12f));
+
+    // Scale: +-10 cents (short) and +-50 cents (a quarter-tone, long) at both edges.
+    for (auto cents : { 10.0f, -10.0f, 50.0f, -50.0f })
+    {
+        const auto major = std::abs (cents) > 20.0f;
+        const auto len = major ? 3.0f : 2.0f;
+        const auto colour = phosphor.withAlpha (major ? 0.40f : 0.28f);
+        c.hLine (0.0f, len, wobbleY (cents), colour);
+        c.hLine (screenWidth - len, screenWidth, wobbleY (cents), colour);
+    }
 }
 
-void WobbleDisplay::drawContent (juce::Graphics& g, juce::Rectangle<float> screen)
+void WobbleDisplay::drawLive (juce::Graphics& g)
 {
-    drawGraticule (g, screen, phosphor, staticAlpha());
-    if (activity < 0.01f)
+    const auto mix = param (ParamIDs::wobbleMix) * 0.01f;
+    const auto intensity = liveIntensity() * (0.45f + 0.55f * mix);
+    uint32_t first = 0;
+    const auto count = newestEntries (telemetry.wobblePitch, wobbleColumns * 2, first);
+    const auto columns = count / 2;
+    if (columns < 2 || intensity < 0.004f)
         return;
 
-    const auto amount = param (ParamIDs::wobbleAmount) * 0.01f;
-    const auto balance = param (ParamIDs::wobbleBalance) * 0.01f;
-    const auto flux = param (ParamIDs::wobbleFlux) * 0.01f;
+    const auto& ring = telemetry.wobblePitch;
     const auto stereo = param (ParamIDs::wobbleStereo) > 0.5f;
-    const auto wow = std::min (1.0f, 2.0f * (1.0f - balance)) * amount;
-    const auto flutter = std::min (1.0f, 2.0f * balance) * amount;
-    const auto live = telemetry.wobbleMod.load (std::memory_order_relaxed);
+    const auto pitch = (wobbleRight - wobbleLeft) / static_cast<float> (wobbleColumns - 1);
+    const auto start = first + static_cast<uint32_t> (count - columns * 2);
 
-    auto makeTrace = [&] (double offset)
+    struct Lane { std::vector<juce::Point<float>> line, upper, lower; };
+    Lane lanes[2];
+
+    for (int j = 0; j < columns; ++j)
     {
-        juce::Path path;
-        constexpr int points = 90;
-        for (int i = 0; i <= points; ++i)
+        const auto a = start + static_cast<uint32_t> (2 * j);
+        const auto x = wobbleRight - static_cast<float> (columns - 1 - j) * pitch;
+        for (int c = 0; c < 2; ++c)
         {
-            const auto t = static_cast<float> (i) / points;
-            const auto x = screen.getX() + t * screen.getWidth();
-            const auto w = std::sin (juce::MathConstants<double>::twoPi * (t * 1.15 + wowPhase + offset));
-            const auto f = std::sin (juce::MathConstants<double>::twoPi * (t * 7.0 + flutterPhase * 3.0 + offset * 2.0));
-            const auto drift = flux * 0.25f * std::sin (static_cast<float> (time) * 0.7f + t * 5.0f);
-            const auto y = 0.34f * wow * static_cast<float> (w) + 0.12f * flutter * static_cast<float> (f) + drift * amount + 0.08f * live * (1.0f - t);
-            const auto py = screen.getCentreY() - juce::jlimit (-0.40f, 0.40f, y) * screen.getHeight();
-            if (i == 0)
-                path.startNewSubPath (x, py);
-            else
-                path.lineTo (x, py);
+            const auto base = 3 * c;
+            const auto mean = 0.5f * (ring.get (a, base) + ring.get (a + 1, base));
+            const auto lo = std::min (ring.get (a, base + 1), ring.get (a + 1, base + 1));
+            const auto hi = std::max (ring.get (a, base + 2), ring.get (a + 1, base + 2));
+            lanes[c].line.push_back ({ x, wobbleY (mean) });
+            lanes[c].upper.push_back ({ x, wobbleY (hi) });
+            lanes[c].lower.push_back ({ x, wobbleY (lo) });
         }
-        return path;
-    };
+    }
 
-    // Stereo: the right channel is a quieter secondary trace, separated by phase only.
+    Beam beam;
+    beam.xOld = wobbleLeft;
+    beam.xNew = wobbleRight;
+
     if (stereo)
-        strokeSecondary (g, makeTrace (0.25), phosphor, activity);
-    strokeGlow (g, makeTrace (0.0), phosphor, activity);
+    {
+        // The right channel sits underneath: dimmer, thinner, no halo.
+        setAgedFill (g, phosphor, 0.12f * intensity, wobbleLeft, wobbleRight);
+        g.fillPath (bandPath (lanes[1].upper, lanes[1].lower));
+        Beam right = beam;
+        right.width = 1.2f;
+        right.halo = false;
+        right.reference = 6.0f;
+        right.floor = 0.5f;
+        drawBeam (g, lanes[1].line.data(), static_cast<int> (lanes[1].line.size()), phosphor, 0.55f * intensity, right);
+    }
+
+    // Flutter is the band around the line; it is drawn as an envelope, never as aliased per-frame wiggles.
+    setAgedFill (g, phosphor, 0.20f * intensity, wobbleLeft, wobbleRight);
+    g.fillPath (bandPath (lanes[0].upper, lanes[0].lower));
+    beam.reference = 6.0f;
+    beam.floor = 0.5f;
+    drawBeam (g, lanes[0].line.data(), static_cast<int> (lanes[0].line.size()), phosphor, intensity, beam);
+
+    drawEdgePen (g, lanes[0].line.back().y, 0.9f * intensity);
+    if (stereo)
+        drawEdgePen (g, lanes[1].line.back().y, 0.5f * intensity);
 }
 
 //======================================================================================================================
+namespace
+{
+    // DISTORT geometry: origin on the shared baseline. The input axis spans each type's own working range (the
+    // shaper's input after drive), the output axis +-1.5.
+    constexpr float distortOriginX = 66.0f, distortOriginY = 25.0f, distortHalfX = 61.0f, distortHalfY = 21.0f;
+    constexpr float distortRange[] { 3.0f, 4.0f, 3.0f, 3.0f, 2.5f, 2.5f, 5.0f, 3.0f };
+    constexpr int foldType = 6;
+
+    juce::Point<float> distortPoint (float x, float y, float range)
+    {
+        return { distortOriginX + distortHalfX * x / range, distortOriginY - distortHalfY * juce::jlimit (-1.7f, 1.7f, y) / 1.5f };
+    }
+} // namespace
+
 DistortDisplay::DistortDisplay (juce::AudioProcessorValueTreeState& s, dsp::EngineTelemetry& t)
     : ModuleDisplay (s, t, 2, ParamIDs::distortOn) {}
 
+int DistortDisplay::currentType() const { return juce::jlimit (0, 7, juce::roundToInt (param (ParamIDs::distortType))); }
+
 void DistortDisplay::tick (double seconds)
 {
-    const auto drive = telemetry.distortDrive.load (std::memory_order_relaxed);
-    const auto target = isActive() ? 0.22f + 0.78f * drive : 0.0f;
-    glow = approach (glow, target, static_cast<float> (seconds), target > glow ? 0.05f : 0.35f);
-    flicker = approach (flicker, random.nextFloat() * 0.08f, static_cast<float> (seconds), 0.04f);
+    watchData (telemetry.distortTransfer.written.load (std::memory_order_relaxed));
+    bias = telemetry.distortBias.load (std::memory_order_relaxed);
     ModuleDisplay::tick (seconds);
 }
 
-juce::String DistortDisplay::readoutText() const
+juce::String DistortDisplay::staticKey() const
 {
-    const auto drive = param (ParamIDs::distortAmount) * param (ParamIDs::magnitude) * 0.01f;
-    return "DRV " + juce::String (juce::roundToInt (drive)) + "%";
+    return juce::String (currentType()) + ":" + juce::String (juce::roundToInt (bias * 100.0f));
 }
 
-void DistortDisplay::drawTube (juce::Graphics& g, juce::Rectangle<float> area, float heat, float flick, float alpha) const
+void DistortDisplay::drawStatic (const Canvas& c)
 {
-    const auto glass = area.withTrimmedBottom (area.getHeight() * 0.16f);
-    const auto base = area.withTop (glass.getBottom() - 1.0f);
+    const auto type = currentType();
+    const auto range = distortRange[type];
 
-    // Warm glow, falling off radially (no hard edges).
-    const auto glowColour = juce::Colour (0xffff7a2a);
-    const auto h = juce::jlimit (0.0f, 1.0f, heat + flick * heat);
-    const auto haloCentre = glass.getCentre().translated (0.0f, glass.getHeight() * 0.12f);
-    const auto haloRadius = glass.getHeight() * 0.72f;
-    juce::ColourGradient halo (glowColour.withAlpha (0.55f * h), haloCentre.x, haloCentre.y,
-                               glowColour.withAlpha (0.0f), haloCentre.x + haloRadius, haloCentre.y, true);
-    g.setGradientFill (halo);
-    g.fillEllipse (juce::Rectangle<float> (haloRadius * 2.0f, haloRadius * 2.0f).withCentre (haloCentre));
+    c.hLine (5.0f, 127.0f, distortOriginY, phosphor.withAlpha (0.09f));
+    c.vLine (distortOriginX, 4.0f, 46.0f, phosphor.withAlpha (0.09f));
 
-    // Bakelite base and pins.
-    g.setColour (juce::Colour (0xff1c1915).withMultipliedAlpha (alpha));
-    g.fillRoundedRectangle (base, 2.0f);
-    g.setColour (juce::Colour (0xff6b5a46).withAlpha (0.6f * alpha));
-    g.drawRoundedRectangle (base, 2.0f, 0.8f);
+    // The clean wire (output = input), dashed, for comparison.
+    juce::Path wire;
+    wire.startNewSubPath (distortPoint (-1.5f, -1.5f, range));
+    wire.lineTo (distortPoint (1.5f, 1.5f, range));
+    c.dashed (wire, 1.0f, 2.0f, phosphor.withAlpha (0.14f));
 
-    // Glass envelope.
-    juce::Path envelope;
-    envelope.addRoundedRectangle (glass.getX(), glass.getY(), glass.getWidth(), glass.getHeight(), glass.getWidth() * 0.45f, glass.getWidth() * 0.45f,
-                                  true, true, false, false);
-    g.setColour (juce::Colour (0x18ffffff).withMultipliedAlpha (alpha));
-    g.fillPath (envelope);
-
-    // Getter flash at the top.
-    juce::ColourGradient getter (juce::Colour (0xff9aa0a6).withAlpha (0.55f * alpha), glass.getCentreX(), glass.getY(),
-                                 juce::Colours::transparentBlack, glass.getCentreX(), glass.getY() + glass.getHeight() * 0.3f, false);
-    g.setGradientFill (getter);
-    g.fillPath (envelope);
-
-    // Plate assembly.
-    const auto plate = glass.reduced (glass.getWidth() * 0.22f, glass.getHeight() * 0.22f).withTrimmedBottom (glass.getHeight() * 0.05f);
-    g.setColour (juce::Colour (0xff3b3d40).withMultipliedAlpha (alpha));
-    g.fillRect (plate);
-    g.setColour (juce::Colour (0xff6a6d70).withMultipliedAlpha (alpha));
-    g.drawRect (plate, 0.8f);
-
-    // Heater filament.
-    const auto filament = juce::Rectangle<float> (plate.getWidth() * 0.32f, plate.getHeight() * 0.7f).withCentre (plate.getCentre());
-    juce::ColourGradient heater (juce::Colour (0xffffd28a).withAlpha (h), filament.getCentreX(), filament.getCentreY(),
-                                 glowColour.withAlpha (0.0f), filament.getCentreX(), filament.getY() - filament.getHeight() * 0.3f, true);
-    g.setGradientFill (heater);
-    g.fillEllipse (filament.expanded (filament.getWidth() * 0.8f, filament.getHeight() * 0.15f));
-    g.setColour (juce::Colour (0xffffe0a0).withAlpha (std::min (1.0f, h * 1.3f)));
-    g.fillRect (filament.withSizeKeepingCentre (1.4f, filament.getHeight()));
-
-    // Glass outline and reflection.
-    g.setColour (juce::Colours::white.withAlpha (0.28f * alpha));
-    g.strokePath (envelope, juce::PathStrokeType (0.9f));
-    g.setColour (juce::Colours::white.withAlpha (0.22f * alpha));
-    g.fillRoundedRectangle (glass.getX() + glass.getWidth() * 0.16f, glass.getY() + glass.getHeight() * 0.18f, glass.getWidth() * 0.09f, glass.getHeight() * 0.55f, 1.5f);
+    // The type's transfer curve, at the bias it is running with.
+    juce::Path curve;
+    constexpr int points = 160;
+    for (int i = 0; i <= points; ++i)
+    {
+        const auto x = range * (2.0f * static_cast<float> (i) / points - 1.0f);
+        const auto p = distortPoint (x, dsp::DistortModule::staticCurve (type, x, bias), range);
+        if (i == 0)
+            curve.startNewSubPath (p);
+        else
+            curve.lineTo (p);
+    }
+    c.stroke (curve, 1.2f, phosphor.withAlpha (0.32f));
 }
 
-void DistortDisplay::drawContent (juce::Graphics& g, juce::Rectangle<float> screen)
+void DistortDisplay::drawLive (juce::Graphics& g)
 {
-    const auto tubeH = screen.getHeight() * 0.86f;
-    const auto tubeW = tubeH * 0.42f;
-    const auto centre = screen.getCentre().translated (0.0f, screen.getHeight() * 0.05f);
-    const auto alpha = staticAlpha();
-    const auto tubeOffset = screen.getWidth() * 0.12f; // keep the pair clear of the DRV readout chip
-    drawTube (g, juce::Rectangle<float> (tubeW, tubeH).withCentre (centre.translated (-tubeW * 0.8f - tubeOffset, 0.0f)), glow * activity, flicker, alpha);
-    drawTube (g, juce::Rectangle<float> (tubeW, tubeH).withCentre (centre.translated (tubeW * 0.8f - tubeOffset, 0.0f)), glow * activity * 0.96f, flicker * 0.8f, alpha);
+    const auto intensity = liveIntensity();
+    uint32_t first = 0;
+    const auto count = newestEntries (telemetry.distortTransfer, 512, first);
+    if (count < 2 || intensity < 0.004f)
+        return;
+
+    const auto type = currentType();
+    const auto range = distortRange[type];
+    const auto& ring = telemetry.distortTransfer;
+    std::vector<juce::Point<float>> trace;
+    trace.reserve (static_cast<size_t> (count));
+    auto peak = 0.0f;
+
+    for (int k = 0; k < count; ++k)
+    {
+        const auto entry = first + static_cast<uint32_t> (k);
+        auto x = ring.get (entry, 0);
+        peak = std::max (peak, std::abs (x));
+        // Monotonic curves pin at the end of the axis (the output is on its rail there anyway); Fold keeps folding.
+        if (type != foldType)
+            x = juce::jlimit (-1.04f * range, 1.04f * range, x);
+        trace.push_back (distortPoint (x, ring.get (entry, 1), range));
+    }
+
+    // Silence shows the bare curve rather than a hot dot parked at the origin.
+    Beam beam;
+    beam.width = 1.5f;
+    beam.reference = 0.9f;
+    beam.floor = 0.15f;
+    drawBeam (g, trace.data(), count, phosphor, intensity * smoothstep (0.02f, 0.08f, peak), beam);
 }
 
 //======================================================================================================================
+namespace
+{
+    // DIGITAL geometry: a test chirp from 20 Hz to 20 kHz on a log axis, 12 visible cycles, amplitude tapering to
+    // the right (as on a sweep generator's output), below the readout slot.
+    constexpr float sweepLeft = 5.0f, sweepWidth = 122.0f, sweepCentre = 28.0f;
+    constexpr int sweepPoints = 1000;
+
+    struct ChirpTable
+    {
+        std::array<float, sweepPoints> u {}, hz {}, phase {}, seconds {};
+
+        ChirpTable()
+        {
+            // Phase advances with f^0.55 per unit of width, so the chirp reads as one smooth sweep; the true time
+            // between points follows from the phase step at that frequency.
+            std::array<float, sweepPoints> step {};
+            auto total = 0.0f;
+            for (int i = 0; i < sweepPoints; ++i)
+            {
+                u[static_cast<size_t> (i)] = static_cast<float> (i) / static_cast<float> (sweepPoints - 1);
+                hz[static_cast<size_t> (i)] = 20.0f * std::pow (1000.0f, u[static_cast<size_t> (i)]);
+                step[static_cast<size_t> (i)] = i == 0 ? 0.0f : std::pow (hz[static_cast<size_t> (i)], 0.55f);
+                total += step[static_cast<size_t> (i)];
+            }
+
+            const auto scale = 12.0f * juce::MathConstants<float>::twoPi / total;
+            for (size_t i = 1; i < static_cast<size_t> (sweepPoints); ++i)
+            {
+                const auto dPhase = step[i] * scale;
+                phase[i] = phase[i - 1] + dPhase;
+                seconds[i] = seconds[i - 1] + dPhase / (juce::MathConstants<float>::twoPi * 0.5f * (hz[i] + hz[i - 1]));
+            }
+        }
+
+        /** Phase and frequency of the chirp at a given true time. */
+        void at (float t, float& outPhase, float& outHz) const
+        {
+            const auto it = std::upper_bound (seconds.begin(), seconds.end(), t);
+            const auto i = static_cast<size_t> (juce::jlimit<long> (1, sweepPoints - 1, static_cast<long> (std::distance (seconds.begin(), it))));
+            const auto span = seconds[i] - seconds[i - 1];
+            const auto f = span > 0.0f ? juce::jlimit (0.0f, 1.0f, (t - seconds[i - 1]) / span) : 0.0f;
+            outPhase = phase[i - 1] + f * (phase[i] - phase[i - 1]);
+            outHz = hz[i - 1] + f * (hz[i] - hz[i - 1]);
+        }
+    };
+
+    const ChirpTable& chirp()
+    {
+        static const ChirpTable table;
+        return table;
+    }
+
+    float sweepAmplitude (float u) { return 17.5f * (1.0f - 0.55f * u); }
+    float sweepX (float hz) { return sweepLeft + sweepWidth * std::log (hz / 20.0f) / std::log (1000.0f); }
+
+    float quantiseLevel (float v, float levels) { return std::round (v * levels) / levels; }
+} // namespace
+
 DigitalDisplay::DigitalDisplay (juce::AudioProcessorValueTreeState& s, dsp::EngineTelemetry& t)
     : ModuleDisplay (s, t, 3, ParamIDs::digitalOn) {}
 
@@ -407,299 +618,428 @@ void DigitalDisplay::tick (double seconds)
 {
     rate = approach (rate, telemetry.digitalRate.load (std::memory_order_relaxed), static_cast<float> (seconds), 0.08f);
     bits = approach (bits, telemetry.digitalBits.load (std::memory_order_relaxed), static_cast<float> (seconds), 0.08f);
+    jitter = telemetry.digitalJitter.load (std::memory_order_relaxed);
+    rebuildSweep();
     ModuleDisplay::tick (seconds);
 }
 
 juce::String DigitalDisplay::readoutText() const
 {
-    // Bits are shown as a whole number; the trace below still uses the continuous value.
-    const auto rateStr = rate >= 999.0f ? juce::String (rate / 1000.0f, 1) + "k" : juce::String (juce::roundToInt (rate));
-    return rateStr + " " + juce::String (juce::jlimit (1, 16, juce::roundToInt (bits))) + "b";
+    const auto rateText = rate >= 999.5f ? juce::String (rate / 1000.0f, 1) + "k" : juce::String (juce::roundToInt (rate));
+    return bits < 15.5f ? rateText + "  " + juce::String (juce::jlimit (1, 16, juce::roundToInt (bits))) + "b" : rateText;
 }
 
-void DigitalDisplay::drawContent (juce::Graphics& g, juce::Rectangle<float> screen)
+void DigitalDisplay::drawStatic (const Canvas& c)
 {
-    drawGraticule (g, screen, phosphor, staticAlpha());
-    if (activity < 0.01f)
+    // The clean chirp, faint: the reference the processed sweep departs from.
+    const auto& table = chirp();
+    juce::Path clean;
+    for (size_t i = 0; i < static_cast<size_t> (sweepPoints); i += 2)
+    {
+        const juce::Point<float> p (sweepLeft + sweepWidth * table.u[i], sweepCentre - std::sin (table.phase[i]) * sweepAmplitude (table.u[i]));
+        if (i == 0)
+            clean.startNewSubPath (p);
+        else
+            clean.lineTo (p);
+    }
+    c.stroke (clean, 1.1f, phosphor.withAlpha (0.16f));
+}
+
+void DigitalDisplay::rebuildSweep()
+{
+    const auto hostRate = telemetry.sampleRate.load (std::memory_order_relaxed);
+    const auto smooth = param (ParamIDs::digitalSmooth) * 0.01f;
+    const auto focusLow = param (ParamIDs::digitalFocusLow);
+    const auto focusHigh = param (ParamIDs::digitalFocusHigh);
+    const auto cut = param (ParamIDs::digitalCut) > 0.5f;
+    const auto compand = param (ParamIDs::digitalCompand) > 0.5f;
+    const auto mix = param (ParamIDs::digitalMix) * 0.01f;
+
+    const auto key = juce::String (juce::roundToInt (rate)) + "/" + juce::String (juce::roundToInt (bits * 20.0f)) + "/" + juce::String (juce::roundToInt (jitter * 100.0f))
+                   + "/" + juce::String (juce::roundToInt (smooth * 100.0f)) + "/" + juce::String (juce::roundToInt (focusLow)) + "/" + juce::String (juce::roundToInt (focusHigh))
+                   + "/" + juce::String (static_cast<int> (cut)) + juce::String (static_cast<int> (compand)) + "/" + juce::String (juce::roundToInt (mix * 100.0f));
+    if (key == sweepKey && ! sweep.empty())
+        return;
+    sweepKey = key;
+
+    const auto& table = chirp();
+    const auto rateReduced = rate < hostRate * 0.985f;
+    const auto bitsReduced = bits < 15.5f;
+    const auto levels = std::pow (2.0f, bits - 1.0f);
+    const auto antiAliasHz = std::exp (juce::jmap (smooth, std::log (0.45f * hostRate), std::log (std::min (0.45f * hostRate, 0.46f * rate))));
+
+    // One sample of the module's converter, as in DigitalModule: anti-alias filter (Smooth), hold, quantise.
+    auto converted = [&] (long k)
+    {
+        // Clock jitter moves the sampling instants by a fixed pseudo-random amount per sample.
+        const auto wobble = jitter * 0.5f * (std::fmod (std::sin (static_cast<float> (k) * 12.9898f) * 43758.547f, 1.0f));
+        float ph = 0.0f, hz = 20.0f;
+        table.at ((static_cast<float> (k) + wobble) / rate, ph, hz);
+        const auto antiAlias = 1.0f / std::sqrt (1.0f + std::pow (hz / antiAliasHz, 4.0f));
+        auto v = 0.5f * antiAlias * std::sin (ph);
+
+        if (bitsReduced)
+        {
+            const auto linear = quantiseLevel (v, levels);
+            if (compand)
+            {
+                constexpr float mu = 255.0f;
+                const auto encoded = std::copysign (std::log1p (mu * std::abs (v)) / std::log1p (mu), v);
+                const auto q = quantiseLevel (encoded, levels);
+                v = std::copysign ((std::exp (std::abs (q) * std::log1p (mu)) - 1.0f) / mu, q);
+            }
+            else
+            {
+                v = linear;
+            }
+        }
+        return v / 0.5f;
+    };
+
+    sweep.clear();
+    sweep.reserve (static_cast<size_t> (sweepPoints));
+
+    for (size_t i = 0; i < static_cast<size_t> (sweepPoints); ++i)
+    {
+        const auto clean = std::sin (table.phase[i]);
+        auto processed = clean;
+        const auto inBand = table.hz[i] >= focusLow && table.hz[i] <= focusHigh;
+
+        if (! inBand)
+        {
+            processed = cut ? 0.0f : clean;
+        }
+        else if (rateReduced || bitsReduced)
+        {
+            if (rateReduced)
+            {
+                const auto position = table.seconds[i] * rate;
+                const auto k = static_cast<long> (std::floor (position));
+                processed = converted (k);
+                if (smooth > 0.0f) // reconstruction filter, shown as a blend towards the joined samples
+                    processed = juce::jmap (smooth, processed, juce::jmap (position - static_cast<float> (k), processed, converted (k + 1)));
+            }
+            else
+            {
+                processed = converted (static_cast<long> (std::floor (table.seconds[i] * hostRate)));
+                processed = bitsReduced ? processed : clean;
+            }
+        }
+
+        const auto value = clean + mix * (processed - clean);
+        sweep.push_back ({ sweepLeft + sweepWidth * table.u[i], sweepCentre - value * sweepAmplitude (table.u[i]) });
+    }
+
+    nyquistX = rateReduced && rate * 0.5f < 20000.0f ? sweepX (rate * 0.5f) : -1.0f;
+}
+
+void DigitalDisplay::drawLive (juce::Graphics& g)
+{
+    const auto intensity = activity;
+    if (sweep.empty() || intensity < 0.004f)
         return;
 
-    const auto steps = juce::jlimit (5.0f, 160.0f, 160.0f * rate / 48000.0f);
-    const auto levels = juce::jlimit (1.0f, 64.0f, std::pow (2.0f, bits - 1.0f));
-    const auto phase = static_cast<float> (time) * 0.35f;
-    auto wave = [&] (float t) { return 0.34f * std::sin (juce::MathConstants<float>::twoPi * (t * 1.35f + phase)); };
+    Beam beam;
+    beam.reference = 2.2f;
+    beam.floor = 0.35f;
+    drawBeam (g, sweep.data(), static_cast<int> (sweep.size()), phosphor, intensity, beam);
 
-    juce::Path smooth, stepped;
-    constexpr int points = 120;
-    for (int i = 0; i <= points; ++i)
+    // Nyquist: where the sweep passes half the sample rate and aliasing begins.
+    if (nyquistX > 0.0f)
     {
-        const auto t = static_cast<float> (i) / points;
-        const auto p = juce::Point<float> (screen.getX() + t * screen.getWidth(), screen.getCentreY() - wave (t) * screen.getHeight());
-        if (i == 0) smooth.startNewSubPath (p); else smooth.lineTo (p);
+        juce::Path mark;
+        mark.addTriangle (nyquistX - 2.3f, screenHeight, nyquistX, screenHeight - 3.2f, nyquistX + 2.3f, screenHeight);
+        g.setColour (phosphor.withAlpha (0.8f * intensity));
+        g.fillPath (mark);
     }
 
-    for (int s = 0; s < static_cast<int> (std::ceil (steps)); ++s)
+    // Focus band edges, when the band does not cover the whole sweep.
+    g.setColour (phosphor.withAlpha (0.45f * intensity));
+    for (auto hz : { param (ParamIDs::digitalFocusLow), param (ParamIDs::digitalFocusHigh) })
     {
-        const auto t0 = static_cast<float> (s) / steps;
-        const auto t1 = std::min (1.0f, static_cast<float> (s + 1) / steps);
-        auto v = wave (t0) / 0.34f;
-        v = std::round (v * levels) / levels * 0.34f;
-        const auto y = screen.getCentreY() - v * screen.getHeight();
-        const auto x0 = screen.getX() + t0 * screen.getWidth();
-        const auto x1 = screen.getX() + t1 * screen.getWidth();
-        if (s == 0) stepped.startNewSubPath (x0, y); else stepped.lineTo (x0, y);
-        stepped.lineTo (x1, y);
+        const auto u = std::log (std::max (1.0f, hz) / 20.0f) / std::log (1000.0f);
+        if (u > 0.01f && u < 0.99f)
+            g.fillRect (juce::Rectangle<float> (sweepLeft + sweepWidth * u - 0.5f, screenHeight - 4.0f, 1.0f, 4.0f));
     }
-
-    // The original signal is the reference line, the held samples are the primary trace.
-    strokeSecondary (g, smooth, phosphor, activity * 0.6f);
-    strokeGlow (g, stepped, phosphor, activity);
 }
 
 //======================================================================================================================
+namespace
+{
+    // SPACE geometry: a linear time axis (1.5 s across) and a dB axis from 0 dB (just under the readout slot)
+    // down to -60 dB on the floor line.
+    constexpr float spaceLeft = 5.0f, spaceRight = 128.0f, spaceSeconds = 1.5f;
+    constexpr float spaceTop = 11.5f, spaceFloor = 44.5f;
+    constexpr int resonatorType = 5;
+
+    float spaceX (float seconds) { return spaceLeft + (spaceRight - spaceLeft) * seconds / spaceSeconds; }
+    float spaceY (float db) { return spaceTop + (spaceFloor - spaceTop) * juce::jlimit (0.0f, 60.0f, -db) / 60.0f; }
+
+    // Resonator: twelve chromatic cells from C, with a keyboard strip under them.
+    constexpr float cellLeft = 5.0f, cellPitch = 122.0f / 12.0f, cellTop = 13.0f, cellFloor = 40.5f;
+    bool isBlackKey (int note) { return note == 1 || note == 3 || note == 6 || note == 8 || note == 10; }
+} // namespace
+
 SpaceDisplay::SpaceDisplay (juce::AudioProcessorValueTreeState& s, dsp::EngineTelemetry& t)
     : ModuleDisplay (s, t, 4, ParamIDs::spaceOn) {}
 
+bool SpaceDisplay::isResonator() const { return juce::roundToInt (param (ParamIDs::spaceType)) == resonatorType; }
+
+float SpaceDisplay::decayAt (float hz) const
+{
+    return dsp::SpaceModule::decaySecondsAt (juce::jlimit (0, 5, juce::roundToInt (param (ParamIDs::spaceType))), decaySeconds,
+                                             param (ParamIDs::spaceFocusLow), param (ParamIDs::spaceFocusHigh), hz);
+}
+
 void SpaceDisplay::tick (double seconds)
 {
-    energy = approach (energy, telemetry.spaceEnergy.load (std::memory_order_relaxed), static_cast<float> (seconds), 0.2f);
+    watchData (telemetry.spaceWet.written.load (std::memory_order_relaxed));
+    decaySeconds = telemetry.spaceDecaySeconds.load (std::memory_order_relaxed);
+    preDelayMs = telemetry.spacePreDelayMs.load (std::memory_order_relaxed);
+
+    for (size_t k = 0; k < 12; ++k)
+    {
+        // The combs ring down by themselves; only a short release keeps the cells from flickering frame to frame.
+        const auto db = gainToDb (telemetry.spaceNotes[k].load (std::memory_order_relaxed));
+        noteDb[k] = db > noteDb[k] ? db : approach (noteDb[k], db, static_cast<float> (seconds), 0.05f);
+    }
+
     ModuleDisplay::tick (seconds);
 }
 
-float SpaceDisplay::decaySeconds() const
-{
-    // Same mapping as the engine's RT60 range per type (see SpaceModule::spec).
-    static constexpr float minRt[] { 0.12f, 0.25f, 0.5f, 0.8f, 0.6f, 0.3f };
-    static constexpr float maxRt[] { 1.2f, 3.0f, 8.0f, 14.0f, 5.0f, 6.0f };
-    const auto type = juce::jlimit (0, 5, juce::roundToInt (param (ParamIDs::spaceType)));
-    const auto d = param (ParamIDs::spaceDecay) * 0.01f;
-    return minRt[type] * std::pow (maxRt[type] / minRt[type], d);
-}
+juce::String SpaceDisplay::staticKey() const { return isResonator() ? "resonator" : "decay"; }
 
 juce::String SpaceDisplay::readoutText() const
 {
-    const auto rt = decaySeconds();
-    return juce::String (rt, rt < 10.0f ? 1 : 0) + "s " + juce::String (juce::roundToInt (param (ParamIDs::spacePreDelay))) + "ms";
+    const auto rt = decayAt (1000.0f);
+    return juce::String (rt, rt < 10.0f ? 1 : 0) + " s";
 }
 
-void SpaceDisplay::drawContent (juce::Graphics& g, juce::Rectangle<float> screen)
+void SpaceDisplay::drawStatic (const Canvas& c)
 {
-    // Echogram: direct sound, early reflections after the pre-delay, then the decaying tail.
-    // The time axis is fixed (3.2 s across the screen, square-root scaled so short rooms still get room to read)
-    // and the tail is drawn in dB, as decay plots are, so it falls in a straight line to -60 dB at the decay time.
-    const auto alpha = staticAlpha();
-    drawGraticule (g, screen, phosphor, alpha);
-
-    const auto plot = screen.reduced (6.0f, 6.0f).withTrimmedTop (2.0f);
-    const auto axisSeconds = 3.2f;
-    const auto baseline = plot.getBottom();
-    auto xAt = [&] (float seconds) { return plot.getX() + plot.getWidth() * juce::jlimit (0.0f, 1.0f, std::sqrt (juce::jmax (0.0f, seconds) / axisSeconds)); };
-
-    const auto type = juce::jlimit (0, 5, juce::roundToInt (param (ParamIDs::spaceType)));
-    const auto preDelay = param (ParamIDs::spacePreDelay) * 0.001f;
-    const auto rt = decaySeconds();
-    const auto stereo = param (ParamIDs::spaceStereo) > 0.5f;
-    const auto amount = param (ParamIDs::spaceAmount) * 0.01f;
-    const auto breathe = 0.6f + 0.4f * juce::jlimit (0.0f, 1.0f, energy * 6.0f);
-    const auto intensity = juce::jlimit (0.3f, 1.0f, alpha * (0.45f + 0.55f * std::sqrt (amount)));
-
-    // Early reflection pattern per type (fixed, so it never shimmers).
-    struct Pattern { int count; float spanSeconds; };
-    static constexpr Pattern patterns[] { { 6, 0.04f }, { 10, 0.08f }, { 18, 0.03f }, { 8, 0.15f }, { 5, 0.15f }, { 12, 0.144f } };
-    const auto& pattern = patterns[type];
-
-    auto drawChannel = [&] (float tailScale, float jitter, bool primary)
+    if (isResonator())
     {
-        juce::Path spikes;
-        juce::Random r (static_cast<juce::int64> (type * 97 + 11));
-        const auto direct = xAt (0.0f);
-        spikes.startNewSubPath (direct, baseline);
-        spikes.lineTo (direct, baseline - 0.80f * plot.getHeight());
-
-        float lastEarly = preDelay;
-        for (int i = 0; i < pattern.count; ++i)
+        for (int k = 0; k < 12; ++k)
         {
-            const auto frac = type == 5 || type == 4 ? static_cast<float> (i) / pattern.count
-                                                     : std::pow (r.nextFloat(), 0.8f);
-            const auto t = preDelay + frac * pattern.spanSeconds;
-            lastEarly = std::max (lastEarly, t);
-            const auto height = juce::jmap (static_cast<float> (i) / std::max (1, pattern.count - 1), 0.65f, 0.30f) * plot.getHeight()
-                              * (type == 5 ? 0.85f : 0.7f + 0.3f * r.nextFloat());
-            const auto x = xAt (t) + jitter * (r.nextFloat() - 0.5f);
-            spikes.startNewSubPath (x, baseline);
-            spikes.lineTo (x, baseline - height);
-        }
+            const auto x = cellLeft + cellPitch * static_cast<float> (k);
+            juce::Path slot;
+            slot.addRectangle (x + 1.3f, cellTop, cellPitch - 2.6f, cellFloor - cellTop);
+            c.fill (slot, phosphor.withAlpha (0.07f));
 
-        // Exponential tail (-60 dB over the decay time), breathing with the live wet level.
-        juce::Path tail;
-        const auto h0 = 0.55f * plot.getHeight() * breathe;
-        const auto start = lastEarly;
-        const auto tailSeconds = rt * tailScale;
-        tail.startNewSubPath (xAt (start), baseline);
-        constexpr int points = 64;
-        for (int i = 0; i <= points; ++i)
-        {
-            // Uniform steps along the (square-root) screen axis, mapped back to seconds.
-            const auto u0 = std::sqrt (start / axisSeconds);
-            const auto u = u0 + (1.0f - u0) * static_cast<float> (i) / points;
-            const auto t = u * u * axisSeconds;
-            auto env = h0 * juce::jmax (0.0f, 1.0f - (t - start) / std::max (0.05f, tailSeconds));
-            if (type == 4) // spring: a little ripple riding on the tail
-                env *= 1.0f + 0.15f * std::sin ((t - start) * 60.0f);
-            tail.lineTo (xAt (t), baseline - env);
+            juce::Path key;
+            const auto black = isBlackKey (k);
+            key.addRectangle (x + 1.3f, 42.5f, cellPitch - 2.6f, black ? 2.0f : 5.0f);
+            c.fill (key, phosphor.withAlpha (black ? 0.22f : 0.42f));
         }
-        auto fill = tail;
-        fill.lineTo (xAt (axisSeconds), baseline);
-        fill.closeSubPath();
+        return;
+    }
 
-        if (primary)
+    c.hLine (spaceLeft, spaceRight, spaceFloor, phosphor.withAlpha (0.14f));
+    for (int i = 1; i <= 6; ++i)
+    {
+        const auto t = 0.25f * static_cast<float> (i);
+        const auto major = i % 2 == 0;
+        c.vLine (spaceX (t), spaceFloor + 1.0f, spaceFloor + (major ? 4.0f : 2.2f), phosphor.withAlpha (major ? 0.40f : 0.25f));
+    }
+}
+
+void SpaceDisplay::drawLive (juce::Graphics& g)
+{
+    if (activity < 0.004f)
+        return;
+
+    if (isResonator())
+    {
+        for (size_t k = 0; k < 12; ++k)
         {
-            g.setColour (phosphor.withAlpha (0.10f * intensity));
-            g.fillPath (fill);
-            strokeGlow (g, tail, phosphor, intensity);
-            strokeOutline (g, spikes, phosphor, 0.75f * intensity);
+            const auto level = juce::jlimit (0.0f, 1.0f, (noteDb[k] + 66.0f) / 60.0f);
+            if (level <= 0.0f)
+                continue;
+            const auto x = cellLeft + cellPitch * static_cast<float> (k);
+            const auto top = cellFloor - level * (cellFloor - cellTop);
+            g.setColour (phosphor.withAlpha (0.78f * liveIntensity()));
+            g.fillRect (juce::Rectangle<float> (x + 1.3f, top, cellPitch - 2.6f, cellFloor - top));
         }
+        return;
+    }
+
+    // The model: what this type, Decay, Pre-delay, Focus and Amount should do to a single hit.
+    const auto type = juce::jlimit (0, 5, juce::roundToInt (param (ParamIDs::spaceType)));
+    const auto amount = juce::jlimit (0.0f, 1.0f, param (ParamIDs::spaceAmount) * param (ParamIDs::magnitude) * 1.0e-4f);
+    const auto dryDb = std::max (-60.0f, gainToDb (std::min (1.0f, 2.0f * (1.0f - amount))));
+    const auto wetDb = std::max (-60.0f, gainToDb (std::pow (std::min (1.0f, 2.0f * amount), 1.2f)));
+    float buildMinMs = 0.0f, buildMaxMs = 0.0f;
+    dsp::SpaceModule::buildUpMs (type, buildMinMs, buildMaxMs);
+    const auto pre = preDelayMs * 0.001f;
+    const auto riseStart = pre + buildMinMs * 0.001f;
+    const auto peakTime = pre + buildMaxMs * 0.001f;
+
+    auto slope = [&] (float rt)
+    {
+        juce::Path p;
+        p.startNewSubPath (spaceX (peakTime), spaceY (wetDb));
+        const auto end = peakTime + rt * (60.0f + wetDb) / 60.0f;
+        if (end <= spaceSeconds)
+            p.lineTo (spaceX (end), spaceFloor);
         else
-        {
-            strokeSecondary (g, tail, phosphor, intensity);
-        }
+            p.lineTo (spaceRight, spaceY (wetDb - 60.0f * (spaceSeconds - peakTime) / std::max (0.01f, rt)));
+        return p;
     };
 
-    if (stereo)
-        drawChannel (0.93f, 2.0f, false);
-    drawChannel (1.0f, 0.0f, true);
+    const auto modelAlpha = activity;
+    juce::Path guide;
+    guide.startNewSubPath (spaceX (riseStart), spaceFloor);
+    guide.lineTo (spaceX (peakTime), spaceY (wetDb));
+    guide.addPath (slope (decayAt (1000.0f)));
 
-    // Baseline.
-    g.setColour (phosphor.withAlpha (0.25f * alpha));
-    g.drawHorizontalLine (juce::roundToInt (baseline), plot.getX(), plot.getRight());
+    juce::Path body (guide);
+    body.lineTo (body.getCurrentPosition().x, spaceFloor);
+    body.closeSubPath();
+    g.setColour (phosphor.withAlpha (0.07f * modelAlpha));
+    g.fillPath (body);
+    g.setColour (phosphor.withAlpha (0.38f * modelAlpha));
+    g.strokePath (guide, juce::PathStrokeType (1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // Treble decays faster (the damping); dashed.
+    juce::Path treble;
+    const float dash[] { 2.0f, 2.0f };
+    juce::PathStrokeType (1.0f).createDashedStroke (treble, slope (decayAt (5000.0f)), dash, 2);
+    g.setColour (phosphor.withAlpha (0.26f * modelAlpha));
+    g.fillPath (treble);
+
+    // The dry hit at time zero.
+    if (dryDb > -59.0f)
+    {
+        g.setColour (phosphor.withAlpha (0.55f * modelAlpha));
+        g.drawLine (spaceLeft + 0.6f, spaceFloor, spaceLeft + 0.6f, spaceY (dryDb), 1.4f);
+    }
+
+    // The measured wet level since the latest note, written onto the guide (normalised to its own peak).
+    const auto& ring = telemetry.spaceWet;
+    const auto written = ring.written.load (std::memory_order_acquire);
+    const auto onset = telemetry.spaceOnsetEntry.load (std::memory_order_relaxed);
+    const auto since = static_cast<int> (written - onset);
+    const auto steps = static_cast<int> (spaceSeconds / 0.01f);
+    const auto fadeSteps = 30;
+    if (since < 2 || since > steps + fadeSteps || since > ring.size / 2)
+        return;
+
+    const auto count = std::min (since, steps);
+    auto peak = -120.0f;
+    for (int i = 0; i < count; ++i)
+        peak = std::max (peak, ring.get (onset + static_cast<uint32_t> (i), 0));
+
+    std::vector<juce::Point<float>> comet;
+    comet.reserve (static_cast<size_t> (count));
+    for (int i = 0; i < count; ++i)
+        comet.push_back ({ spaceX (0.01f * static_cast<float> (i)), spaceY (ring.get (onset + static_cast<uint32_t> (i), 0) - peak + wetDb) });
+
+    const auto ending = since > steps ? 1.0f - static_cast<float> (since - steps) / static_cast<float> (fadeSteps) : 1.0f;
+    const auto intensity = liveIntensity() * ending;
+    Beam beam;
+    beam.reference = 1.6f;
+    beam.floor = 0.25f;
+    beam.xNew = comet.back().x;
+    beam.xOld = beam.xNew - (spaceRight - spaceLeft) * 0.8f / spaceSeconds;
+    drawBeam (g, comet.data(), count, phosphor, intensity, beam);
+
+    g.setColour (phosphor.withAlpha (intensity));
+    g.fillEllipse (juce::Rectangle<float> (3.6f, 3.6f).withCentre (comet.back()));
 }
 
 //======================================================================================================================
+namespace
+{
+    // MAGNETIC geometry: 2 s of tape, newest at the right, level in dB hanging from a 0 dB ceiling (-24 dB at the
+    // bottom of the lane). Stereo splits the screen into two lanes.
+    constexpr float tapeLeft = 4.0f, tapeRight = 126.0f;
+    constexpr int tapeColumns = 128;
+
+    struct TapeLane { float top, bottom; };
+    constexpr TapeLane monoLane { 8.0f, 46.0f };
+    constexpr TapeLane stereoLanes[] { { 4.5f, 24.0f }, { 28.0f, 48.5f } };
+
+    float tapeY (const TapeLane& lane, float db) { return lane.top + (lane.bottom - lane.top) * juce::jlimit (0.0f, 24.0f, -db) / 24.0f; }
+} // namespace
+
 MagneticDisplay::MagneticDisplay (juce::AudioProcessorValueTreeState& s, dsp::EngineTelemetry& t)
     : ModuleDisplay (s, t, 5, ParamIDs::magneticOn) {}
 
+bool MagneticDisplay::isStereo() const { return param (ParamIDs::magneticStereo) > 0.5f; }
+
 void MagneticDisplay::tick (double seconds)
 {
-    gain = approach (gain, telemetry.magneticGain.load (std::memory_order_relaxed), static_cast<float> (seconds), 0.04f);
-    dropout = approach (dropout, telemetry.magneticDropout.load (std::memory_order_relaxed), static_cast<float> (seconds), 0.05f);
-
-    // Tape transport: the pack moves from the left reel to the right one over about 90 s, then rewinds.
-    if (isActive())
-    {
-        transport += seconds / 90.0;
-        transport -= std::floor (transport);
-    }
-
-    const auto speed = isActive() ? 1.4 * (0.75 + 0.25 * gain) : 0.0;
-    const auto p = static_cast<float> (transport);
-    leftAngle += seconds * speed / (0.42 + 0.50 * (1.0 - p));
-    rightAngle += seconds * speed / (0.42 + 0.50 * p);
+    watchData (telemetry.magneticTape.written.load (std::memory_order_relaxed));
     ModuleDisplay::tick (seconds);
 }
 
-juce::String MagneticDisplay::readoutText() const
+juce::String MagneticDisplay::staticKey() const { return isStereo() ? "stereo" : "mono"; }
+
+void MagneticDisplay::drawStatic (const Canvas& c)
 {
-    if (dropout > 0.05f)
-        return "DROP";
-    if (param (ParamIDs::magneticSync) > 0.5f)
-        return syncDivisionNames()[juce::roundToInt (param (ParamIDs::magneticDivision))];
-    return rateText (param (ParamIDs::magneticRate));
-}
-
-juce::Colour MagneticDisplay::readoutColour() const
-{
-    return dropout > 0.05f ? Colours::ledRed : phosphor;
-}
-
-void MagneticDisplay::drawReel (juce::Graphics& g, juce::Point<float> centre, float flange, float pack, float angle, float alpha, float live) const
-{
-    const auto circle = [] (juce::Point<float> c, float r) { return juce::Rectangle<float> (r * 2.0f, r * 2.0f).withCentre (c); };
-
-    // Flange (outer reel edge).
-    juce::Path flangePath;
-    flangePath.addEllipse (circle (centre, flange));
-    strokeOutline (g, flangePath, phosphor, 0.55f * alpha);
-
-    // Tape pack: a solid disc with a defined edge.
-    g.setColour (phosphor.withAlpha (0.24f * alpha));
-    g.fillEllipse (circle (centre, pack));
-    juce::Path packEdge;
-    packEdge.addEllipse (circle (centre, pack));
-    strokeOutline (g, packEdge, phosphor, 0.5f * alpha);
-
-    // NAB-style hub: dark centre with three spokes reaching into the pack.
-    const auto hubR = flange * 0.22f;
-    g.setColour (juce::Colour (0xff050706));
-    g.fillEllipse (circle (centre, hubR));
-    juce::Path hub;
-    hub.addEllipse (circle (centre, hubR));
-    for (int k = 0; k < 3; ++k)
+    const auto drawLane = [&] (const TapeLane& lane)
     {
-        const auto a = angle + juce::MathConstants<float>::twoPi * static_cast<float> (k) / 3.0f;
-        hub.startNewSubPath (centre.x + std::cos (a) * hubR, centre.y + std::sin (a) * hubR);
-        hub.lineTo (centre.x + std::cos (a) * flange * 0.40f, centre.y + std::sin (a) * flange * 0.40f);
-    }
-    if (live > 0.01f)
-        strokeGlow (g, hub, phosphor, live, 1.2f);
+        c.hLine (tapeLeft, tapeRight, lane.top, phosphor.withAlpha (0.14f));
+        for (auto db : { -12.0f, -24.0f })
+            c.hLine (0.0f, 3.0f, tapeY (lane, db), phosphor.withAlpha (0.35f));
+    };
+
+    if (isStereo())
+        for (const auto& lane : stereoLanes)
+            drawLane (lane);
     else
-        strokeOutline (g, hub, phosphor, 0.55f * alpha);
+        drawLane (monoLane);
 }
 
-void MagneticDisplay::drawContent (juce::Graphics& g, juce::Rectangle<float> screen)
+void MagneticDisplay::drawLive (juce::Graphics& g)
 {
-    const auto alpha = staticAlpha();
-    const auto w = screen.getWidth();
-    const auto h = screen.getHeight();
-    const auto flange = h * 0.33f;
-    const auto leftC = juce::Point<float> (screen.getX() + w * 0.25f, screen.getY() + h * 0.42f);
-    const auto rightC = juce::Point<float> (screen.getX() + w * 0.75f, leftC.y);
-    const auto p = static_cast<float> (transport);
-    const auto leftPack = flange * (0.42f + 0.50f * (1.0f - p));
-    const auto rightPack = flange * (0.42f + 0.50f * p);
+    const auto intensity = liveIntensity();
+    uint32_t first = 0;
+    const auto count = newestEntries (telemetry.magneticTape, tapeColumns, first);
+    if (count < 2 || intensity < 0.004f)
+        return;
 
-    // Tape path: from the outside of each pack, round two guide rollers, across the head.
-    const auto rollerY = screen.getY() + h * 0.82f;
-    const auto rollerL = juce::Point<float> (screen.getX() + w * 0.38f, rollerY);
-    const auto rollerR = juce::Point<float> (screen.getX() + w * 0.62f, rollerY);
-    const auto rollerR0 = 2.2f;
-    const auto tapeAlpha = juce::jlimit (0.2f, 1.0f, gain) * activity;
+    const auto& ring = telemetry.magneticTape;
+    const auto stereo = isStereo();
+    const auto pitch = (tapeRight - tapeLeft) / static_cast<float> (tapeColumns - 1);
 
-    juce::Path leftRun, rightRun, headRun;
-    leftRun.startNewSubPath (leftC.x - leftPack * 0.35f, leftC.y + leftPack * 0.94f);
-    leftRun.lineTo (rollerL.x - rollerR0 * 0.5f, rollerL.y + rollerR0);
-    rightRun.startNewSubPath (rollerR.x + rollerR0 * 0.5f, rollerR.y + rollerR0);
-    rightRun.lineTo (rightC.x + rightPack * 0.35f, rightC.y + rightPack * 0.94f);
-    headRun.startNewSubPath (rollerL.x, rollerL.y + rollerR0);
-    headRun.lineTo (rollerR.x, rollerR.y + rollerR0);
-
-    for (auto* run : { &leftRun, &rightRun })
-        if (tapeAlpha > 0.01f)
-            strokeGlow (g, *run, phosphor, tapeAlpha, 1.0f);
-        else
-            strokeOutline (g, *run, phosphor, 0.5f * alpha);
-
-    // During a dropout the tape over the head fades out.
-    const auto headAlpha = tapeAlpha * (1.0f - 0.75f * juce::jlimit (0.0f, 1.0f, dropout * 3.0f));
-    if (headAlpha > 0.01f)
-        strokeGlow (g, headRun, phosphor, headAlpha, 1.0f);
-    else
-        strokeOutline (g, headRun, phosphor, 0.5f * alpha);
-
-    // Guide rollers and the head.
-    for (auto c : { rollerL, rollerR })
+    for (int c = 0; c < (stereo ? 2 : 1); ++c)
     {
-        juce::Path roller;
-        roller.addEllipse (juce::Rectangle<float> (rollerR0 * 2.0f, rollerR0 * 2.0f).withCentre (c));
-        strokeOutline (g, roller, phosphor, 0.7f * alpha);
+        const auto& lane = stereo ? stereoLanes[c] : monoLane;
+        std::vector<juce::Point<float>> low, high;
+        low.reserve (static_cast<size_t> (count));
+        high.reserve (static_cast<size_t> (count));
+
+        for (int k = 0; k < count; ++k)
+        {
+            const auto entry = first + static_cast<uint32_t> (k);
+            const auto gainDb = ring.get (entry, 2 * c);
+            const auto loss = ring.get (entry, 2 * c + 1);
+            const auto x = tapeRight - static_cast<float> (count - 1 - k) * pitch;
+            low.push_back ({ x, tapeY (lane, dsp::MagneticModule::responseDb (gainDb, loss, 1000.0f)) });
+            high.push_back ({ x, tapeY (lane, dsp::MagneticModule::responseDb (gainDb, loss, 10000.0f)) });
+        }
+
+        // The ribbon between the two tones is the treble being lost.
+        setAgedFill (g, phosphor, 0.18f * intensity, tapeLeft, tapeRight);
+        g.fillPath (bandPath (low, high));
+
+        Beam treble;
+        treble.width = 1.1f;
+        treble.halo = false;
+        treble.floor = 1.0f;
+        treble.xOld = tapeLeft;
+        treble.xNew = tapeRight;
+        drawBeam (g, high.data(), count, phosphor, 0.5f * intensity, treble);
+
+        Beam tone;
+        tone.reference = 1.5f;
+        tone.floor = 0.35f;
+        tone.xOld = tapeLeft;
+        tone.xNew = tapeRight;
+        drawBeam (g, low.data(), count, phosphor, intensity, tone);
+        drawEdgePen (g, low.back().y, 0.85f * intensity);
     }
-
-    const auto head = juce::Rectangle<float> (10.0f, 4.5f).withCentre ({ screen.getCentreX(), rollerY + rollerR0 + 3.0f });
-    g.setColour (phosphor.withAlpha (0.55f * alpha));
-    g.fillRoundedRectangle (head, 1.5f);
-    g.setColour (juce::Colour (0xff050706));
-    g.drawVerticalLine (juce::roundToInt (head.getCentreX()), head.getY(), head.getBottom());
-
-    drawReel (g, leftC, flange, leftPack, static_cast<float> (leftAngle), alpha, activity);
-    drawReel (g, rightC, flange, rightPack, static_cast<float> (rightAngle), alpha, activity);
 }
 
 //======================================================================================================================

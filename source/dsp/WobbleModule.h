@@ -14,7 +14,7 @@ public:
     void prepare (double sampleRate, int maxBlockSize);
     void reset();
     void process (float* left, float* right, int n, const WobbleParams& params, const TransportInfo& transport) noexcept;
-    void publish (EngineTelemetry& telemetry) const noexcept;
+    void setTelemetry (EngineTelemetry* t) noexcept { telemetry = t; }
 
 private:
     static constexpr int controlInterval = 16;
@@ -29,7 +29,13 @@ private:
     FluxSource rateFlux, depthFlux;
     Smoother depthSm, balanceSm, wowRateSm, flutterRateSm, mixSm, stereoSm, centreSm;
     bool primed = false;
-    float lastMod = 0.0f;
+
+    // Display history: pitch deviation per control block, gathered into 1/64 s windows.
+    void pushPitch (float centsL, float centsR, int len) noexcept;
+    EngineTelemetry* telemetry = nullptr;
+    float prevDelay[2] { -1.0f, -1.0f };
+    float pitchSum[2] {}, pitchMin[2] {}, pitchMax[2] {};
+    int pitchBlocks = 0, pitchSamples = 0, pitchWindow = 750;
     float prevCentre = 0.0f, prevAw = 0.0f, prevAf = 0.0f, prevAr = 0.0f, prevEngage = 0.0f;
 };
 

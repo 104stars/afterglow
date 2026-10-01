@@ -5,6 +5,7 @@ namespace afterglow::dsp
 void WobbleModule::prepare (double sampleRate, int)
 {
     fs = sampleRate;
+    pitchWindow = std::max (1, static_cast<int> (std::lround (sampleRate / 64.0)));
 
     for (auto& d : delay)
         d.allocate (static_cast<int> (sampleRate * 0.5) + SincTable::taps + 8);
@@ -37,7 +38,8 @@ void WobbleModule::reset()
 
     wowPhase = flutterPhase = flutterPhase2 = 0.0;
     primed = false;
-    lastMod = 0.0f;
+    prevDelay[0] = prevDelay[1] = -1.0f;
+    pitchBlocks = pitchSamples = 0;
 }
 
 void WobbleModule::process (float* left, float* right, int n, const WobbleParams& p, const TransportInfo& transport) noexcept
@@ -125,7 +127,7 @@ void WobbleModule::process (float* left, float* right, int n, const WobbleParams
         const auto wowInc = static_cast<double> (wowHz) / fs;
         const auto flutterInc = static_cast<double> (flutterHz) / fs;
         const auto invLen = 1.0f / static_cast<float> (len);
-        auto mod = 0.0f;
+        auto endL = prevDelay[0], endR = prevDelay[1];
 
         for (int i = 0; i < len; ++i)
         {
@@ -165,6 +167,9 @@ void WobbleModule::process (float* left, float* right, int n, const WobbleParams
             const auto dL = std::max (minDelay, cCentre + cAw * wowL + cAf * flutterL + cAr * driftL);
             const auto dR = std::max (minDelay, cCentre + cAw * wowR + cAf * flutterR + cAr * driftR);
 
+            endL = dL;
+            endR = dR;
+
             const auto xL = left[idx];
             const auto xR = right[idx];
             delay[0].push (xL);
@@ -178,8 +183,6 @@ void WobbleModule::process (float* left, float* right, int n, const WobbleParams
             const auto m = mixSm.next() * cEngage;
             left[idx] = xL + m * (wetL - xL);
             right[idx] = xR + m * (wetR - xR);
-
-            mod = cAw * wowL + cAf * flutterL + cAr * driftL;
         }
 
         prevCentre = centre;
@@ -188,14 +191,43 @@ void WobbleModule::process (float* left, float* right, int n, const WobbleParams
         prevAr = ar;
         prevEngage = engage;
 
-        const auto range = aw + af + ar;
-        lastMod = range > 1.0e-3f ? std::clamp (mod / (range * 1.2f), -1.0f, 1.0f) * engage : 0.0f;
+        // Display: the pitch deviation this block, from how fast the delay time changed (a delay that grows
+        // by d samples over n samples plays back at (1 - d / n) of the original speed).
+        if (telemetry != nullptr)
+        {
+            auto cents = [len] (float from, float to)
+            {
+                if (from < 0.0f)
+                    return 0.0f;
+                return 1200.0f * std::log2 (std::max (0.05f, 1.0f - (to - from) / static_cast<float> (len)));
+            };
+            pushPitch (bypassed ? 0.0f : cents (prevDelay[0], endL), bypassed ? 0.0f : cents (prevDelay[1], endR), len);
+        }
+
+        prevDelay[0] = endL;
+        prevDelay[1] = endR;
     }
 }
 
-void WobbleModule::publish (EngineTelemetry& telemetry) const noexcept
+void WobbleModule::pushPitch (float centsL, float centsR, int len) noexcept
 {
-    telemetry.wobbleMod.store (lastMod, std::memory_order_relaxed);
+    const float cents[2] { centsL, centsR };
+    for (int c = 0; c < 2; ++c)
+    {
+        pitchSum[c] = pitchBlocks == 0 ? cents[c] : pitchSum[c] + cents[c];
+        pitchMin[c] = pitchBlocks == 0 ? cents[c] : std::min (pitchMin[c], cents[c]);
+        pitchMax[c] = pitchBlocks == 0 ? cents[c] : std::max (pitchMax[c], cents[c]);
+    }
+
+    ++pitchBlocks;
+    pitchSamples += len;
+
+    if (pitchSamples >= pitchWindow)
+    {
+        const auto count = static_cast<float> (pitchBlocks);
+        telemetry->wobblePitch.push ({ pitchSum[0] / count, pitchMin[0], pitchMax[0], pitchSum[1] / count, pitchMin[1], pitchMax[1] });
+        pitchBlocks = pitchSamples = 0;
+    }
 }
 
 } // namespace afterglow::dsp

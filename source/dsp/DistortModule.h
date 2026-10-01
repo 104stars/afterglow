@@ -27,6 +27,11 @@ public:
 
     void process (float* left, float* right, int n, const DistortParams& params) noexcept;
     void publish (EngineTelemetry& telemetry) const noexcept;
+    void setTelemetry (EngineTelemetry* t) noexcept { telemetry = t; }
+
+    /** The memoryless part of each type's transfer curve (what the display draws), and the type's resting bias. */
+    static float staticCurve (int type, float x, float bias) noexcept;
+    static float baseBias (int type) noexcept;
 
 private:
     struct ShaperState
@@ -39,7 +44,6 @@ private:
 
     static constexpr int controlInterval = 16;
     static float maxDriveDb (int type) noexcept;
-    static float staticCurve (int type, float x, float bias) noexcept;
     float shape (int type, float x, ShaperState& s, float bias) noexcept;
     float computeMakeup (int type, float drive, float bias) const noexcept;
     void configureShapers (double oversampledRate);
@@ -63,8 +67,12 @@ private:
     LinearRamp typeFade;
     int currentType = 0, pendingType = -1;
     bool primed = false;
-    float glow = 0.0f;
     float lastDrive = 1.0f;
+    float lastBias = 0.0f;
+
+    // Display history: shaper input (after drive) and output pairs.
+    EngineTelemetry* telemetry = nullptr;
+    int transferStep = 4, transferCounter = 0;
 };
 
 } // namespace afterglow::dsp

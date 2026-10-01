@@ -185,9 +185,4 @@ void NoiseModule::addTo (float* left, float* right, int n) const noexcept
     }
 }
 
-void NoiseModule::publish (EngineTelemetry& telemetry) const noexcept
-{
-    telemetry.noiseLevel.store (lastBlockRms, std::memory_order_relaxed);
-}
-
 } // namespace afterglow::dsp

@@ -23,9 +23,9 @@ public:
     /** Adds the rendered noise to the signal. */
     void addTo (float* left, float* right, int n) const noexcept;
 
-    void publish (EngineTelemetry& telemetry) const noexcept;
 
     const float* getRenderedLeft() const noexcept { return bufL.data(); }
+    const float* getRenderedRight() const noexcept { return bufR.data(); }
 
 private:
     static constexpr int controlInterval = 16;

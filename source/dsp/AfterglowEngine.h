@@ -51,7 +51,10 @@ private:
     std::vector<float> dryL, dryR;
     Smoother mixSm;
     bool mixPrimed = false;
-    int scopeDecimator = 0;
+
+    // Noise display envelope: running statistics of the current window.
+    int noiseWindow = 1024, noiseCount = 0;
+    float noiseMin = 0.0f, noiseMax = 0.0f, noiseSum = 0.0f, noiseSumSq = 0.0f;
 
     EngineTelemetry telemetry;
 };

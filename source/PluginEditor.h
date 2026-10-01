@@ -55,6 +55,10 @@ public:
     void mouseDown (const juce::MouseEvent& e) override;
 
     /** Renders the interface into an image (used for documentation screenshots and tests). */
+    /** Advances the meters and displays by one animation frame (used by the snapshot tool). */
+    void advanceAnimation (double seconds) { content.refresh (seconds); }
+
+    /** Renders the editor to an image, optionally with an overlay open. */
     juce::Image renderSnapshot (float scale, const juce::String& overlay = {});
 
 private:

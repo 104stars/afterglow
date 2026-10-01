@@ -76,16 +76,17 @@ namespace Colours
         return colours[juce::jlimit (0, 5, module)];
     }
 
-    /** Phosphor colour used by each module's display window. */
+    /** Emitter colour of each module's display: one warm phosphor seen through a per-module colour filter,
+        kept about a quarter less saturated than the enamel so the screens read as instruments, not neon. */
     inline juce::Colour modulePhosphor (int module)
     {
         static const juce::Colour colours[] {
-            juce::Colour (0xffff8a5c),
-            juce::Colour (0xffffd166),
-            juce::Colour (0xffd4f08a),
-            juce::Colour (0xff7ef0e6),
-            juce::Colour (0xff9cc8ff),
-            juce::Colour (0xffe0a8ff),
+            juce::Colour (0xfff49e7c), // noise
+            juce::Colour (0xfff1c878), // wobble
+            juce::Colour (0xffd2d98c), // distort
+            juce::Colour (0xff92d4c4), // digital
+            juce::Colour (0xffa4c2e8), // space
+            juce::Colour (0xffd2aee0), // magnetic
         };
         return colours[juce::jlimit (0, 5, module)];
     }

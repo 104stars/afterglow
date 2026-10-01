@@ -255,10 +255,6 @@ juce::Image AfterglowEditor::renderSnapshot (float scale, const juce::String& ov
     if (overlay.isNotEmpty())
         content.showOverlay (overlay);
 
-    // Advance the animations a little so the displays show something representative.
-    for (int i = 0; i < 20; ++i)
-        content.refresh (1.0 / 30.0);
-
     return createComponentSnapshot (getLocalBounds(), true, scale);
 }
 
