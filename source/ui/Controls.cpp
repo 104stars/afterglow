@@ -9,7 +9,8 @@ namespace
 
     void configurePopup (juce::Slider& s)
     {
-        s.setPopupDisplayEnabled (true, false, nullptr, 1200);
+        // Value bubbles live inside the plugin window (separate desktop windows misbehave in some hosts).
+        s.setPopupDisplayEnabled (true, false, s.findParentComponentOfClass<juce::AudioProcessorEditor>(), 1200);
     }
 
     double defaultValueOf (APVTS& state, const juce::String& id)
@@ -58,6 +59,11 @@ void LabelledKnob::attachTo (const juce::String& paramId)
     slider.setDoubleClickReturnValue (true, defaultValueOf (state, paramId));
 }
 
+void LabelledKnob::parentHierarchyChanged()
+{
+    configurePopup (slider);
+}
+
 void LabelledKnob::resized()
 {
     auto area = getLocalBounds();
@@ -85,6 +91,12 @@ ParamSlider::ParamSlider (APVTS& state, const juce::String& paramId, const juce:
     configurePopup (*this);
     attachment = std::make_unique<APVTS::SliderAttachment> (state, paramId, *this);
     setDoubleClickReturnValue (true, defaultValueOf (state, paramId));
+}
+
+void ParamSlider::parentHierarchyChanged()
+{
+    juce::Slider::parentHierarchyChanged();
+    configurePopup (*this);
 }
 
 //======================================================================================================================

@@ -17,6 +17,7 @@ public:
 
     void resized() override;
     void paint (juce::Graphics& g) override;
+    void parentHierarchyChanged() override;
 
     juce::Slider& getSlider() noexcept { return slider; }
     void setLabelHeight (float h) { labelHeight = h; resized(); }
@@ -39,6 +40,7 @@ class ParamSlider : public juce::Slider
 {
 public:
     ParamSlider (APVTS& state, const juce::String& paramId, const juce::String& style, bool vertical = false, const juce::String& tooltip = {});
+    void parentHierarchyChanged() override;
 
 private:
     std::unique_ptr<APVTS::SliderAttachment> attachment;

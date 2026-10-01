@@ -131,7 +131,7 @@ const std::vector<PresetManager::Preset>& getFactoryPresets()
             { "distort_type", 0 }, { "distort_amount", 18 },
             { "space_type", 1 }, { "space_amount", 18 }, { "space_decay", 40 },
             { "magnetic_amount", 20 }, { "magnetic_dropouts", 6 },
-            { "low_cut", 60 }, { "high_cut", 9000 } }),
+            { "low_cut", 60 }, { "high_cut", 9000 }, { "out_gain", 2.5 } }),
 
         make ("Cassette Rhodes", "Keys", "Electric piano bounced to a well-loved cassette.", {
             { "noise_type", 3 }, { "noise_amount", 30 }, { "noise_follow", 20 },
@@ -188,7 +188,7 @@ const std::vector<PresetManager::Preset>& getFactoryPresets()
             { "digital_on", 1 }, { "digital_amount", 30 }, { "digital_balance", 60 }, { "digital_smooth", 20 },
             { "digital_focus_low", 300 }, { "digital_focus_high", 3400 }, { "digital_cut", 1 },
             { "low_cut", 300 }, { "low_cut_hard", 1 }, { "high_cut", 3400 }, { "high_cut_hard", 1 },
-            { "tone_mode", 1 }, { "tone", 40 } })),
+            { "tone_mode", 1 }, { "tone", 40 }, { "out_gain", 2.5 } })),
 
         make ("AM Radio Voice", "Vocals", "An old AM broadcast with static and fading.", {
             { "noise_type", 10 }, { "noise_amount", 25 }, { "noise_follow", 40 },
@@ -197,7 +197,7 @@ const std::vector<PresetManager::Preset>& getFactoryPresets()
             { "space_type", 1 }, { "space_amount", 8 },
             { "magnetic_amount", 20 }, { "magnetic_dropouts", 10 },
             { "low_cut", 250 }, { "low_cut_hard", 1 }, { "high_cut", 4500 }, { "high_cut_hard", 1 },
-            { "tone_mode", 1 }, { "tone", 30 } }),
+            { "tone_mode", 1 }, { "tone", 30 }, { "out_gain", 3.0 } }),
 
         make ("Vintage Vocal Plate", "Vocals", "A classic plate with pre-delay and a gentle valve front end.", {
             { "noise_type", 2 }, { "noise_amount", 10 },
@@ -210,7 +210,7 @@ const std::vector<PresetManager::Preset>& getFactoryPresets()
         make ("Megaphone", "Vocals", "A shouty, honky horn speaker.", with (allOff, {
             { "distort_on", 1 }, { "distort_type", 2 }, { "distort_amount", 60 }, { "distort_focus_low", 500 }, { "distort_focus_high", 4000 },
             { "space_on", 1 }, { "space_type", 0 }, { "space_amount", 10 },
-            { "low_cut", 450 }, { "low_cut_hard", 1 }, { "high_cut", 4200 }, { "high_cut_hard", 1 } })),
+            { "low_cut", 450 }, { "low_cut_hard", 1 }, { "high_cut", 4200 }, { "high_cut_hard", 1 }, { "out_gain", 2.5 } })),
 
         // Lo-Fi -------------------------------------------------------------------------------------------------------
         make ("Lo-Fi Study Beats", "Lo-Fi", "Everything at once: vinyl, wobble, tape and a crushed sampler.", {
@@ -236,7 +236,7 @@ const std::vector<PresetManager::Preset>& getFactoryPresets()
             { "distort_type", 3 }, { "distort_amount", 30 },
             { "space_on", 0 },
             { "magnetic_amount", 35 }, { "magnetic_balance", 50 }, { "magnetic_dropouts", 15 },
-            { "low_cut", 70 }, { "high_cut", 10000 }, { "width", 90 } }),
+            { "low_cut", 70 }, { "high_cut", 10000 }, { "width", 90 }, { "out_gain", 3.0 } }),
 
         make ("8-Bit Console", "Lo-Fi", "Home computer sound chip: few bits, hard edges.", with (allOff, {
             { "noise_on", 1 }, { "noise_type", 12 }, { "noise_amount", 15 }, { "noise_follow", 70 },
@@ -254,7 +254,7 @@ const std::vector<PresetManager::Preset>& getFactoryPresets()
             { "space_on", 0 },
             { "magnetic_amount", 15 },
             { "low_cut", 250 }, { "low_cut_hard", 1 }, { "high_cut", 5500 }, { "high_cut_hard", 1 },
-            { "tone_mode", 1 }, { "tone", 30 }, { "width", 0 } }),
+            { "tone_mode", 1 }, { "tone", 30 }, { "width", 0 }, { "out_gain", 3.5 } }),
 
         make ("Worn Out Tape", "Lo-Fi", "The tape has been played a thousand times and it shows.", {
             { "noise_type", 2 }, { "noise_amount", 25 },
@@ -262,7 +262,7 @@ const std::vector<PresetManager::Preset>& getFactoryPresets()
             { "distort_type", 3 }, { "distort_amount", 30 },
             { "space_on", 0 },
             { "magnetic_amount", 65 }, { "magnetic_balance", 35 }, { "magnetic_dropouts", 45 }, { "magnetic_flux", 40 },
-            { "high_cut", 9000 } }),
+            { "high_cut", 9000 }, { "out_gain", 3.0 } }),
 
         // Sound Design ------------------------------------------------------------------------------------------------
         make ("Cosmic Flux", "Sound Design", "Maximum Flux everywhere: nothing ever repeats.", {
@@ -285,7 +285,7 @@ const std::vector<PresetManager::Preset>& getFactoryPresets()
             { "distort_type", 7 }, { "distort_amount", 25 },
             { "digital_amount", 35 }, { "digital_focus_low", 500 }, { "digital_focus_high", 3000 }, { "digital_cut", 1 },
             { "space_type", 3 }, { "space_amount", 30 }, { "space_decay", 70 },
-            { "magnetic_amount", 40 }, { "magnetic_dropouts", 40 } }),
+            { "magnetic_amount", 40 }, { "magnetic_dropouts", 40 }, { "out_gain", 3.0 } }),
 
         make ("Destroyer", "Sound Design", "Folded, crushed and falling apart. Handle with care.", {
             { "noise_type", 7 }, { "noise_amount", 15 },
@@ -304,7 +304,7 @@ const std::vector<PresetManager::Preset>& getFactoryPresets()
             { "space_on", 0 },
             { "magnetic_amount", 30 }, { "magnetic_dropouts", 25 },
             { "low_cut", 300 }, { "low_cut_hard", 1 }, { "high_cut", 4000 }, { "high_cut_hard", 1 },
-            { "width", 0 } }),
+            { "width", 0 }, { "out_gain", 3.5 } }),
 
         make ("Next Door", "Post", "Muffled through a wall, in the room next door.", with (allOff, {
             { "noise_on", 1 }, { "noise_type", 9 }, { "noise_amount", 15 }, { "noise_post", 1 },
@@ -315,7 +315,7 @@ const std::vector<PresetManager::Preset>& getFactoryPresets()
             { "noise_on", 1 }, { "noise_type", 11 }, { "noise_amount", 25 }, { "noise_follow", 70 },
             { "distort_on", 1 }, { "distort_type", 5 }, { "distort_amount", 50 }, { "distort_focus_low", 400 }, { "distort_focus_high", 3000 },
             { "digital_on", 1 }, { "digital_amount", 25 }, { "digital_balance", 70 },
-            { "low_cut", 450 }, { "low_cut_hard", 1 }, { "high_cut", 3000 }, { "high_cut_hard", 1 } })),
+            { "low_cut", 450 }, { "low_cut_hard", 1 }, { "high_cut", 3000 }, { "high_cut_hard", 1 }, { "out_gain", 2.5 } })),
 
         make ("Haunted Hum", "Post", "A humming, breathing room for horror cues.", {
             { "noise_type", 5 }, { "noise_amount", 25 }, { "noise_follow", 0 }, { "noise_flux", 40 },

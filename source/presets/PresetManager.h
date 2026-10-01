@@ -77,6 +77,7 @@ private:
     std::vector<Preset> presets;
     int currentIndex = -1;
     juce::String currentName { "Init" };
+    juce::String startupName;
     std::atomic<bool> dirty { false };
     std::atomic<int> loadingDepth { 0 };
 };

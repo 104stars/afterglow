@@ -31,7 +31,7 @@ jobs:
             pluginval: pluginval_Linux.zip
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -93,7 +93,7 @@ jobs:
           ls -la dist
 
       - name: Upload plugin
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Afterglow-${{ matrix.name }}
           path: dist

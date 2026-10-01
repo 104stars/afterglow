@@ -14,6 +14,7 @@ PresetManager::PresetManager (juce::AudioProcessorValueTreeState& s, juce::UndoM
     for (const auto& id : allParameterIds())
         state.addParameterListener (id, this);
 
+    startupName = openSettings()->getValue ("startupPreset");
     refreshUserPresets();
     currentIndex = 0;
     currentName = presets.empty() ? juce::String ("Init") : presets.front().name;
@@ -134,28 +135,25 @@ void PresetManager::applyValues (const std::vector<std::pair<juce::String, float
     runWhileLoading ([&]
     {
         // Every preset starts from the defaults, so presets only need to list what they change.
+        // The final value of each parameter is resolved first, so each parameter changes exactly once.
         for (const auto& id : allParameterIds())
         {
             if (! isPresetParameter (id))
                 continue;
 
-            if (auto* param = state.getParameter (id))
-            {
-                param->beginChangeGesture();
-                param->setValueNotifyingHost (param->getDefaultValue());
-                param->endChangeGesture();
-            }
-        }
-
-        for (const auto& [id, value] : values)
-        {
-            if (! isPresetParameter (id))
+            auto* param = state.getParameter (id);
+            if (param == nullptr)
                 continue;
 
-            if (auto* param = state.getParameter (id))
+            auto target = param->getDefaultValue();
+            for (const auto& [presetId, value] : values)
+                if (presetId == id)
+                    target = param->convertTo0to1 (value);
+
+            if (std::abs (param->getValue() - target) > 1.0e-6f)
             {
                 param->beginChangeGesture();
-                param->setValueNotifyingHost (param->convertTo0to1 (value));
+                param->setValueNotifyingHost (target);
                 param->endChangeGesture();
             }
         }
@@ -320,8 +318,10 @@ bool PresetManager::renameUserPreset (int index, const juce::String& newName, ju
 
     if (getStartupPresetName() == preset.name)
     {
+        startupName = cleanName;
         auto settings = openSettings();
         settings->setValue ("startupPreset", cleanName);
+        settings->saveIfNeeded();
     }
 
     refreshUserPresets();
@@ -346,7 +346,12 @@ void PresetManager::setStartupPreset (int index)
     auto settings = openSettings();
 
     if (juce::isPositiveAndBelow (index, static_cast<int> (presets.size())))
-        settings->setValue ("startupPreset", presets[static_cast<size_t> (index)].name);
+        startupName = presets[static_cast<size_t> (index)].name;
+    else
+        startupName.clear();
+
+    if (startupName.isNotEmpty())
+        settings->setValue ("startupPreset", startupName);
     else
         settings->removeValue ("startupPreset");
 
@@ -355,7 +360,7 @@ void PresetManager::setStartupPreset (int index)
 
 juce::String PresetManager::getStartupPresetName() const
 {
-    return openSettings()->getValue ("startupPreset");
+    return startupName;
 }
 
 void PresetManager::loadStartupPresetIfAny()

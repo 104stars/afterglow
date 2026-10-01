@@ -145,15 +145,18 @@ The test runner is built with the plugin and runs in CI on Windows, macOS and Li
 | Every module on with its big knob at 0 % | transparent (below 1e-5) |
 | Impulse position equals the reported latency | exact (0, 49, 61, 65 samples for 1x, 2x, 4x, 8x) |
 | Fuzzing: random parameters, sample rates 22.05 to 192 kHz, block sizes 1 to 2048, changes mid-stream | always finite and bounded |
-| All 40 factory presets | finite, peaks below 6 |
+| All 40 factory presets | finite, peaks below 6, quieter band-limited presets level-compensated |
 | State save and restore | all 68 parameters restored |
+| Host bypass | delayed by exactly the reported latency |
+| Preset state | modified flag, defaults for unlisted parameters, Quality never changed by presets |
 | Noise calibration | every type within 0.1 dB of its target level |
 | Distort level matching (sine at -12 dBFS) | within about +/-2.5 dB from 25 % to 100 % drive |
 | Space level across decay settings | within about +/-2 dB (Resonator within 4 dB) |
 | Wobble depth | measured pitch swing within 6 % of the design value |
 | Aliasing (5 kHz sine, Clip at 80 %) | 1x: -12 dB, 2x: -25 dB, 4x: -30 dB relative to the harmonics |
 
-CI also validates the VST3 with [pluginval](https://github.com/Tracktion/pluginval) at strictness level 8.
+CI also validates the VST3 with [pluginval](https://github.com/Tracktion/pluginval) at strictness level 8 on Windows, macOS
+and Linux (including the editor tests on Windows and macOS); it also passes at strictness level 10 locally.
 
 ## 5. Sources
 

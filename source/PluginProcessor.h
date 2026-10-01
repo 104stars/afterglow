@@ -19,7 +19,9 @@ public:
     void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using AudioProcessor::processBlock;
+    using AudioProcessor::processBlockBypassed;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -89,6 +91,7 @@ private:
     std::array<int, 4> latencyForOrder {};
     std::atomic<int> requestedOrder { 2 };
     juce::AudioBuffer<float> monoScratch;
+    std::array<dsp::DelayBuffer, 2> bypassDelay;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AfterglowProcessor)
 };

@@ -83,6 +83,9 @@ void AfterglowProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     engine.prepare (sampleRate, samplesPerBlock, order);
     setLatencySamples (latencyForOrder[static_cast<size_t> (order)]);
     monoScratch.setSize (1, samplesPerBlock);
+
+    for (auto& d : bypassDelay)
+        d.allocate (1024);
 }
 
 void AfterglowProcessor::releaseResources() {}
@@ -252,6 +255,30 @@ void AfterglowProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         std::copy_n (left + start, len, scratch);
         engine.process (left + start, scratch, len, params, transport);
     }
+}
+
+void AfterglowProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
+    // Host bypass: pass the audio through, delayed by the reported latency so nothing shifts in time.
+    const auto latency = getLatencySamples();
+    const auto channels = std::min (buffer.getNumChannels(), 2);
+
+    for (int ch = 0; ch < channels; ++ch)
+    {
+        auto& delay = bypassDelay[static_cast<size_t> (ch)];
+        if (delay.capacity() <= latency)
+            continue;
+
+        auto* data = buffer.getWritePointer (ch);
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            delay.push (data[i]);
+            data[i] = delay.read (latency + 1);
+        }
+    }
+
+    for (auto ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
+        buffer.clear (ch, 0, buffer.getNumSamples());
 }
 
 juce::AudioProcessorEditor* AfterglowProcessor::createEditor()

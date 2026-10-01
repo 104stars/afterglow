@@ -229,6 +229,40 @@ void testNullAndLatency()
     }
 }
 
+void testBypassAndPresetState()
+{
+    section ("Host bypass and preset state");
+
+    auto proc = makeProcessor (48000.0, 256);
+    juce::AudioBuffer<float> b (2, 2048);
+    b.clear();
+    b.setSample (0, 100, 1.0f);
+    b.setSample (1, 100, 1.0f);
+    juce::MidiBuffer midi;
+    for (int pos = 0; pos < b.getNumSamples(); pos += 256)
+    {
+        juce::AudioBuffer<float> view (b.getArrayOfWritePointers(), 2, pos, 256);
+        proc->processBlockBypassed (view, midi);
+    }
+    int peak = 0;
+    for (int i = 0; i < b.getNumSamples(); ++i)
+        if (std::abs (b.getSample (0, i)) > std::abs (b.getSample (0, peak)))
+            peak = i;
+    check (peak - 100 == proc->getLatencySamples(), "bypass is delayed by the reported latency");
+
+    auto& pm = proc->getPresetManager();
+    pm.loadPresetByName ("Dusty Breaks");
+    check (! pm.isDirty(), "freshly loaded preset is not marked modified");
+    check (pm.getCurrentPresetName() == "Dusty Breaks", "current preset name follows loads");
+    setParam (*proc, ParamIDs::noiseAmount, 77.0f);
+    check (pm.isDirty(), "editing a parameter marks the preset as modified");
+    setParam (*proc, ParamIDs::quality, 1.0f);
+    pm.loadPresetByName ("Afterglow");
+    check (proc->getState().getParameter (ParamIDs::quality)->getCurrentValueAsText() == qualityNames()[1], "presets never change the quality setting");
+    check (juce::approximatelyEqual (proc->getState().getParameter (ParamIDs::noiseAmount)->convertFrom0to1 (proc->getState().getParameter (ParamIDs::noiseAmount)->getValue()), 18.0f),
+           "loading a preset restores unlisted parameters to their defaults");
+}
+
 void testStabilityFuzz()
 {
     section ("Stability fuzzing (random parameters, sample rates, block sizes)");
@@ -587,6 +621,7 @@ int main()
 
     std::printf ("Afterglow tests\n");
     testNullAndLatency();
+    testBypassAndPresetState();
     testStabilityFuzz();
     testPresets();
     testStateRoundTrip();
