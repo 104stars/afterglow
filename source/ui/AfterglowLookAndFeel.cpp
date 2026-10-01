@@ -481,15 +481,29 @@ void AfterglowLookAndFeel::getIdealPopupMenuItemSize (const juce::String& text, 
 }
 
 //======================================================================================================================
+namespace
+{
+    // Tooltips are measured and drawn from the same layout (same font, same wrap width), so the box always fits
+    // the text exactly; wrapping again at the rounded box width could add a line that then gets clipped.
+    constexpr float tooltipWrapWidth = 260.0f;
+    constexpr int tooltipPadX = 10, tooltipPadY = 7;
+
+    juce::TextLayout makeTooltipLayout (const juce::String& text)
+    {
+        juce::AttributedString s;
+        s.append (text, Fonts::get().labelMedium (15.0f), Colours::ink);
+        s.setWordWrap (juce::AttributedString::WordWrap::byWord);
+        juce::TextLayout layout;
+        layout.createLayout (s, tooltipWrapWidth);
+        return layout;
+    }
+} // namespace
+
 juce::Rectangle<int> AfterglowLookAndFeel::getTooltipBounds (const juce::String& tipText, juce::Point<int> screenPos, juce::Rectangle<int> parentArea)
 {
-    const auto font = Fonts::get().labelMedium (15.0f);
-    juce::AttributedString s;
-    s.append (tipText, font, Colours::ink);
-    juce::TextLayout layout;
-    layout.createLayout (s, 260.0f);
-    const auto w = juce::roundToInt (layout.getWidth()) + 20;
-    const auto h = juce::roundToInt (layout.getHeight()) + 14;
+    const auto layout = makeTooltipLayout (tipText);
+    const auto w = static_cast<int> (std::ceil (layout.getWidth())) + 2 * tooltipPadX + 1;
+    const auto h = static_cast<int> (std::ceil (layout.getHeight())) + 2 * tooltipPadY + 1;
     return juce::Rectangle<int> (screenPos.x > parentArea.getCentreX() ? screenPos.x - (w + 12) : screenPos.x + 24,
                                  screenPos.y > parentArea.getCentreY() ? screenPos.y - (h + 6) : screenPos.y + 6, w, h)
         .constrainedWithin (parentArea);
@@ -503,11 +517,9 @@ void AfterglowLookAndFeel::drawTooltip (juce::Graphics& g, const juce::String& t
     g.setColour (Colours::ink.withAlpha (0.5f));
     g.drawRoundedRectangle (area.reduced (0.5f), 4.0f, 1.0f);
 
-    juce::AttributedString s;
-    s.append (text, Fonts::get().labelMedium (15.0f), Colours::ink);
-    juce::TextLayout layout;
-    layout.createLayout (s, static_cast<float> (width) - 20.0f);
-    layout.draw (g, area.reduced (10.0f, 7.0f));
+    const auto layout = makeTooltipLayout (text);
+    layout.draw (g, juce::Rectangle<float> (static_cast<float> (tooltipPadX), static_cast<float> (tooltipPadY),
+                                            tooltipWrapWidth, layout.getHeight()));
 }
 
 void AfterglowLookAndFeel::fillTextEditorBackground (juce::Graphics& g, int width, int height, juce::TextEditor&)
