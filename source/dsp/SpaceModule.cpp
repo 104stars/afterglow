@@ -125,6 +125,7 @@ void SpaceModule::reset()
     onsetFast = onsetSlow = 0.0f;
     samplesSinceOnset = 1 << 30;
     std::fill (std::begin (notes), std::end (notes), 0.0f);
+    std::fill (std::begin (noteEnergy), std::end (noteEnergy), 0.0f);
 }
 
 float SpaceModule::decaySeconds (int type, float decay) noexcept
@@ -263,7 +264,12 @@ void SpaceModule::process (float* left, float* right, int n, const SpaceParams& 
     predelayFlux.setAmount (p.flux);
 
     if (amountSm.getCurrent() <= 0.0f && amountTarget <= 0.0f)
+    {
+        // Silent, but keep the display's decay time and pre-delay current with the controls.
+        lastRt = decaySeconds (p.type, p.decay);
+        lastPreMs = p.preDelayMs;
         return;
+    }
 
     const auto sr = static_cast<float> (fs);
     const auto onsetFastRelease = std::exp (-static_cast<float> (controlInterval) / (0.04f * sr));
@@ -459,8 +465,15 @@ void SpaceModule::process (float* left, float* right, int n, const SpaceParams& 
         }
     }
 
+    // Resonator display: energy per pitch class, smoothed over about 40 ms so short host blocks do not flicker.
+    // C to D# each collect two combs (C3 and C4, and so on), so they are halved.
+    const auto smoothing = std::exp (-static_cast<float> (std::max (1, n)) / (0.04f * sr));
     for (int k = 0; k < 12; ++k)
-        notes[k] = noteCount > 0 ? std::sqrt (noteSum[k] / static_cast<float> (noteCount)) : 0.0f;
+    {
+        const auto energy = noteCount > 0 ? noteSum[k] / static_cast<float> (noteCount) / (k < numLines - 12 ? 2.0f : 1.0f) : 0.0f;
+        noteEnergy[k] = energy + (noteEnergy[k] - energy) * smoothing;
+        notes[k] = std::sqrt (noteEnergy[k]);
+    }
 }
 
 void SpaceModule::publish (EngineTelemetry& t) const noexcept

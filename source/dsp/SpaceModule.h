@@ -112,7 +112,7 @@ private:
     float lastRt = 1.0f, lastPreMs = 0.0f;
     float noteSum[12] {};
     int noteCount = 0;
-    float notes[12] {};
+    float notes[12] {}, noteEnergy[12] {};
 };
 
 } // namespace afterglow::dsp

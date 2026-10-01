@@ -31,10 +31,10 @@ private:
     bool primed = false;
 
     // Display history: pitch deviation per control block, gathered into 1/64 s windows.
-    void pushPitch (float centsL, float centsR, int len) noexcept;
+    void pushPitch (const float* cents, const float* wowCents, int len) noexcept;
     EngineTelemetry* telemetry = nullptr;
-    float prevDelay[2] { -1.0f, -1.0f };
-    float pitchSum[2] {}, pitchMin[2] {}, pitchMax[2] {};
+    float prevDelay[2] { -1.0f, -1.0f }, prevWowDelay[2] { -1.0f, -1.0f };
+    float wowSum[2] {}, pitchMin[2] {}, pitchMax[2] {};
     int pitchBlocks = 0, pitchSamples = 0, pitchWindow = 750;
     float prevCentre = 0.0f, prevAw = 0.0f, prevAf = 0.0f, prevAr = 0.0f, prevEngage = 0.0f;
 };

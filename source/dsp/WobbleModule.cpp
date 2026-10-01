@@ -39,6 +39,7 @@ void WobbleModule::reset()
     wowPhase = flutterPhase = flutterPhase2 = 0.0;
     primed = false;
     prevDelay[0] = prevDelay[1] = -1.0f;
+    prevWowDelay[0] = prevWowDelay[1] = -1.0f;
     pitchBlocks = pitchSamples = 0;
 }
 
@@ -128,6 +129,7 @@ void WobbleModule::process (float* left, float* right, int n, const WobbleParams
         const auto flutterInc = static_cast<double> (flutterHz) / fs;
         const auto invLen = 1.0f / static_cast<float> (len);
         auto endL = prevDelay[0], endR = prevDelay[1];
+        auto wowEndL = prevWowDelay[0], wowEndR = prevWowDelay[1];
 
         for (int i = 0; i < len; ++i)
         {
@@ -169,6 +171,8 @@ void WobbleModule::process (float* left, float* right, int n, const WobbleParams
 
             endL = dL;
             endR = dR;
+            wowEndL = cCentre + cAw * wowL + cAr * driftL; // the slow part alone, for the display's wow line
+            wowEndR = cCentre + cAw * wowR + cAr * driftR;
 
             const auto xL = left[idx];
             const auto xR = right[idx];
@@ -201,20 +205,24 @@ void WobbleModule::process (float* left, float* right, int n, const WobbleParams
                     return 0.0f;
                 return 1200.0f * std::log2 (std::max (0.05f, 1.0f - (to - from) / static_cast<float> (len)));
             };
-            pushPitch (bypassed ? 0.0f : cents (prevDelay[0], endL), bypassed ? 0.0f : cents (prevDelay[1], endR), len);
+            const float full[2] { bypassed ? 0.0f : cents (prevDelay[0], endL), bypassed ? 0.0f : cents (prevDelay[1], endR) };
+            const float slow[2] { bypassed ? 0.0f : cents (prevWowDelay[0], wowEndL), bypassed ? 0.0f : cents (prevWowDelay[1], wowEndR) };
+            pushPitch (full, slow, len);
         }
 
         prevDelay[0] = endL;
         prevDelay[1] = endR;
+        prevWowDelay[0] = wowEndL;
+        prevWowDelay[1] = wowEndR;
     }
 }
 
-void WobbleModule::pushPitch (float centsL, float centsR, int len) noexcept
+void WobbleModule::pushPitch (const float* cents, const float* wowCents, int len) noexcept
 {
-    const float cents[2] { centsL, centsR };
+    // Mean of the wow alone (the line), and the extremes of the whole deviation including flutter (the band).
     for (int c = 0; c < 2; ++c)
     {
-        pitchSum[c] = pitchBlocks == 0 ? cents[c] : pitchSum[c] + cents[c];
+        wowSum[c] = pitchBlocks == 0 ? wowCents[c] : wowSum[c] + wowCents[c];
         pitchMin[c] = pitchBlocks == 0 ? cents[c] : std::min (pitchMin[c], cents[c]);
         pitchMax[c] = pitchBlocks == 0 ? cents[c] : std::max (pitchMax[c], cents[c]);
     }
@@ -225,7 +233,7 @@ void WobbleModule::pushPitch (float centsL, float centsR, int len) noexcept
     if (pitchSamples >= pitchWindow)
     {
         const auto count = static_cast<float> (pitchBlocks);
-        telemetry->wobblePitch.push ({ pitchSum[0] / count, pitchMin[0], pitchMax[0], pitchSum[1] / count, pitchMin[1], pitchMax[1] });
+        telemetry->wobblePitch.push ({ wowSum[0] / count, pitchMin[0], pitchMax[0], wowSum[1] / count, pitchMin[1], pitchMax[1] });
         pitchBlocks = pitchSamples = 0;
     }
 }

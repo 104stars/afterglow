@@ -57,6 +57,12 @@ protected:
 
 private:
     void updateHatch();
+    void paintFaceplate (juce::Graphics& g, float scale);
+
+    // The faceplate artwork is cached per scale by hand (not with setBufferedToImage, which would also cache the
+    // display and controls and resample them every frame at fractional scales).
+    juce::Image faceplate;
+    float faceplateScale = 0.0f;
 
     Hatch hatch;
     std::atomic<float>* onParam = nullptr;

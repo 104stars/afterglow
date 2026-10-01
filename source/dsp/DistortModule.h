@@ -33,6 +33,9 @@ public:
     static float staticCurve (int type, float x, float bias) noexcept;
     static float baseBias (int type) noexcept;
 
+    /** Transformer only: the transfer for low frequencies, where the iron saturates first. */
+    static float transformerBassCurve (float x, float bias) noexcept;
+
 private:
     struct ShaperState
     {
@@ -40,11 +43,13 @@ private:
         OnePole transformerLow, speakerHighPass, fuzzLowPass;
         Svf speakerBell, speakerLowPass, rattleBand, tapePre, tapeDe;
         FastRandom rng;
+        float tapIn = 0.0f, tapOut = 0.0f; // input and output of the non-linear core, for the display
     };
 
     static constexpr int controlInterval = 16;
     static float maxDriveDb (int type) noexcept;
     float shape (int type, float x, ShaperState& s, float bias) noexcept;
+    void publishTransfer (int step) noexcept;
     float computeMakeup (int type, float drive, float bias) const noexcept;
     void configureShapers (double oversampledRate);
     void updateFocus (float lowHz, float highHz) noexcept;

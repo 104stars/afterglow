@@ -35,9 +35,14 @@ protected:
 
         void hLine (float x0, float x1, float y, juce::Colour colour) const;   // exactly one physical pixel tall
         void vLine (float x, float y0, float y1, juce::Colour colour) const;   // exactly one physical pixel wide
-        void stroke (const juce::Path& path, float width, juce::Colour colour) const;
+        void stroke (const juce::Path& path, float width, juce::Colour colour) const;   // never thinner than 1 pixel
         void dashed (const juce::Path& path, float width, float dash, juce::Colour colour) const;
         void fill (const juce::Path& path, juce::Colour colour) const;
+
+        /** Scale ticks at the left edge: minor ones 2 units long, major ones 3 (never shorter than 2 pixels). */
+        void edgeTick (float y, bool major, juce::Colour colour) const;
+        /** Scale ticks rising from the bottom edge of the glass. */
+        void bottomTick (float x, bool major, juce::Colour colour) const;
     };
 
     virtual void drawStatic (const Canvas&) {}
@@ -55,28 +60,49 @@ protected:
     void watchData (uint32_t written) noexcept;
     /** Strength of the live layer: module on, and data still arriving. */
     float liveIntensity() const noexcept;
+    bool isDataFresh() const noexcept { return staleSeconds < 0.25; }
 
-    /** The beam: a polyline whose brightness follows dwell (bright where it moves slowly, dim on fast edges),
-        with one optional halo pass and an optional left-to-right afterglow (older data dimmer). */
+    /** Afterglow along a time axis: from xOld (at oldRatio of the brightness) up to xFull (full brightness),
+        flat after that. Equal values mean no afterglow. */
+    struct Afterglow
+    {
+        float xOld = 0.0f, xFull = 0.0f, oldRatio = 0.4f;
+    };
+
+    /** The beam: one continuous stroke whose brightness follows dwell (bright where it moves slowly, dim on fast
+        edges), with an optional halo hugging the core and an optional afterglow. */
     struct Beam
     {
-        float width = 1.6f;
+        float width = 1.4f;
         float reference = 2.0f;   // segment length (screen units) that still draws at full brightness
-        float floor = 0.35f;      // dimmest brightness for the fastest segments
+        float floor = 0.35f;      // dimmest brightness, for the fastest segments
         bool halo = true;
-        float xOld = 0.0f, xNew = 0.0f; // afterglow span; equal values mean no afterglow
+        Afterglow afterglow;
     };
     void drawBeam (juce::Graphics& g, const juce::Point<float>* points, int count, juce::Colour colour, float intensity, const Beam& beam) const;
-    void setAgedFill (juce::Graphics& g, juce::Colour colour, float alpha, float xOld, float xNew) const;
+    void setAgedFill (juce::Graphics& g, juce::Colour colour, float alpha, const Afterglow& afterglow) const;
     void drawEdgePen (juce::Graphics& g, float y, float alpha) const;
+
+    /** A time-based scroll position for the recorders: advances smoothly at the data rate between frames and
+        follows the ring's write counter, so the chart neither judders nor runs ahead of the data. */
+    struct ScrollHead
+    {
+        double head = 0.0;
+        void advance (uint32_t written, double seconds, double entriesPerSecond) noexcept;
+    };
+
+    /** Smallest size, in screen units, that is still one device pixel at the current scale. */
+    float pixel() const noexcept { return 1.0f / pixelScale; }
 
     juce::AudioProcessorValueTreeState& state;
     dsp::EngineTelemetry& telemetry;
     juce::Colour phosphor;
     float activity = 0.0f; // smoothed "on" amount
+    float pixelScale = 1.0f;
 
 private:
     void rebuildHousing (float scale);
+    void drawLayer (juce::Graphics& g, const juce::Image& image, juce::Point<float> origin) const;
 
     std::atomic<float>* onParam = nullptr;
     juce::Image housingUnder, housingOver, staticLayer;
@@ -98,6 +124,7 @@ public:
 private:
     void drawStatic (const Canvas&) override;
     void drawLive (juce::Graphics& g) override;
+    ScrollHead scroll;
 };
 
 /** WOBBLE: a pitch recorder. The pitch deviation the module applies, in cents, against time: the line is the wow,
@@ -111,6 +138,7 @@ public:
 private:
     void drawStatic (const Canvas&) override;
     void drawLive (juce::Graphics& g) override;
+    ScrollHead scroll; // in columns (pairs of entries)
 };
 
 /** DISTORT: a curve tracer. The selected type's transfer curve is drawn faintly; the beam traces what the shaper
@@ -127,6 +155,7 @@ private:
     void drawLive (juce::Graphics& g) override;
     int currentType() const;
     float bias = 0.0f;
+    float holdPositive = 0.0f, holdNegative = 0.0f; // how far into the curve the signal reached lately
 };
 
 /** DIGITAL: a converter sweep. A test chirp from 20 Hz to 20 kHz runs through the module's actual rate and bits,
@@ -147,6 +176,7 @@ private:
     juce::String sweepKey;
     std::vector<juce::Point<float>> sweep;
     float nyquistX = -1.0f;
+    bool reduced = false;
 };
 
 /** SPACE: a decay recorder. A faint guide shows the expected decay (pre-delay gap, build-up, then a straight fall
@@ -166,6 +196,8 @@ private:
     bool isResonator() const;
     float decayAt (float hz) const;
 
+    float windowSeconds() const;
+
     float decaySeconds = 1.0f, preDelayMs = 0.0f;
     std::array<float, 12> noteDb {};
 };
@@ -184,6 +216,7 @@ private:
     juce::String staticKey() const override;
     void drawLive (juce::Graphics& g) override;
     bool isStereo() const;
+    ScrollHead scroll;
 };
 
 //======================================================================================================================

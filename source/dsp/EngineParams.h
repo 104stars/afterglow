@@ -160,10 +160,11 @@ struct EngineTelemetry
     /** Noise output (mid), per 25 ms window: min, max, mean, rms. */
     TelemetryRing<256, 4> noiseEnvelope;
 
-    /** Wobble pitch deviation in cents, per 1/64 s window: mean, min, max for L, then for R. */
+    /** Wobble pitch deviation in cents, per 1/64 s window, for L then R: mean of the wow alone, then the lowest and
+        highest deviation including flutter. */
     TelemetryRing<512, 6> wobblePitch;
 
-    /** Distort shaper input (after drive) and output pairs, left channel, about 12 kHz. */
+    /** Distort: input and output of the non-linear core (after drive), left channel, about 12000 pairs a second. */
     TelemetryRing<1024, 2> distortTransfer;
     std::atomic<float> distortBias { 0.0f };
 

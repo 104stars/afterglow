@@ -146,12 +146,12 @@ ModulePanel::ModulePanel (APVTS& s, dsp::EngineTelemetry& t, int index, const ju
     addAndMakeVisible (flux);
     addChildComponent (hatch);
     setOpaque (false);
-    setBufferedToImage (true); // the faceplate is static; children repaint on top of the cached image
 }
 
 void ModulePanel::resized()
 {
     const auto bounds = getLocalBounds();
+    faceplate = {};
 
     // One 14 px content margin all round: display, selectors, divider and Flux share the same edges.
     if (display != nullptr)
@@ -227,8 +227,23 @@ void ModulePanel::drawBalanceCaption (juce::Graphics& g, const juce::String& lef
 
 void ModulePanel::paint (juce::Graphics& g)
 {
+    const auto scale = juce::jlimit (0.25f, 8.0f, g.getInternalContext().getPhysicalPixelScaleFactor());
+    if (! faceplate.isValid() || ! juce::approximatelyEqual (scale, faceplateScale))
+    {
+        faceplateScale = scale;
+        faceplate = juce::Image (juce::Image::ARGB, std::max (1, juce::roundToInt (static_cast<float> (getWidth()) * scale)),
+                                 std::max (1, juce::roundToInt (static_cast<float> (getHeight()) * scale)), true);
+        juce::Graphics fg (faceplate);
+        fg.addTransform (juce::AffineTransform::scale (scale));
+        paintFaceplate (fg, std::max (1.0f, scale));
+    }
+
+    g.drawImage (faceplate, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
+}
+
+void ModulePanel::paintFaceplate (juce::Graphics& g, float scale)
+{
     const auto area = getLocalBounds().toFloat();
-    const auto scale = std::max (1.0f, g.getInternalContext().getPhysicalPixelScaleFactor());
 
     // Drop shadow into the bay.
     g.setColour (juce::Colours::black.withAlpha (0.5f));
