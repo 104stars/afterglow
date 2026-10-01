@@ -11,9 +11,19 @@ namespace
     //                8 Fuzz, 9 Room, 10 Radio, 11 Transmission, 12 8-Bit, 13 White, 14 Pink, 15 Brown
     // Distort types: 0 Tube, 1 Transformer, 2 Speaker, 3 Tape, 4 Fuzz, 5 Clip, 6 Fold, 7 Rectify
     // Space types:   0 Ambience, 1 Room, 2 Plate, 3 Hall, 4 Spring, 5 Resonator
-    using Values = std::vector<std::pair<juce::String, float>>;
+    /** One parameter value; accepts integer or floating-point literals without narrowing warnings. */
+    struct Value
+    {
+        template <typename Number>
+        Value (const char* parameterId, Number v) : id (parameterId), value (static_cast<float> (v)) {}
 
-    PresetManager::Preset make (const char* name, const char* category, const char* description, Values values)
+        juce::String id;
+        float value;
+    };
+
+    using Values = std::vector<Value>;
+
+    PresetManager::Preset make (const char* name, const char* category, const char* description, const Values& values)
     {
         PresetManager::Preset p;
         p.name = name;
@@ -21,7 +31,8 @@ namespace
         p.author = "Afterglow Factory";
         p.description = description;
         p.isFactory = true;
-        p.values = std::move (values);
+        for (const auto& v : values)
+            p.values.emplace_back (v.id, v.value);
         return p;
     }
 
@@ -33,9 +44,9 @@ namespace
     {
         for (const auto& kv : extra)
         {
-            auto it = std::find_if (base.begin(), base.end(), [&] (const auto& b) { return b.first == kv.first; });
+            auto it = std::find_if (base.begin(), base.end(), [&] (const Value& b) { return b.id == kv.id; });
             if (it != base.end())
-                it->second = kv.second;
+                it->value = kv.value;
             else
                 base.push_back (kv);
         }
