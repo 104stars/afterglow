@@ -1,0 +1,100 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-2022
+            configure: -G "Visual Studio 17 2022" -A x64
+            pluginval: pluginval_Windows.zip
+          - name: macOS
+            os: macos-14
+            configure: -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+            pluginval: pluginval_macOS.zip
+          - name: Linux
+            os: ubuntu-24.04
+            configure: -G Ninja -DCMAKE_BUILD_TYPE=Release
+            pluginval: pluginval_Linux.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build xvfb libasound2-dev libx11-dev libxcomposite-dev libxcursor-dev \
+            libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libxi-dev libfreetype-dev libfontconfig1-dev \
+            libgl1-mesa-dev libegl-dev libcurl4-openssl-dev
+
+      - name: Configure
+        shell: bash
+        run: cmake -S . -B build ${{ matrix.configure }}
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Run tests
+        shell: bash
+        env:
+          AFTERGLOW_BENCHMARK: "1"
+        run: |
+          exe=$(find build -type f \( -name "AfterglowTests" -o -name "AfterglowTests.exe" \) -path "*Release*" | head -n 1)
+          echo "Running $exe"
+          if [ "$RUNNER_OS" == "Linux" ]; then xvfb-run -a "$exe"; else "$exe"; fi
+
+      - name: Validate VST3 with pluginval
+        shell: bash
+        run: |
+          curl -sSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/latest/download/${{ matrix.pluginval }}"
+          unzip -q -o pluginval.zip -d pluginval
+          vst3=$(find build -type d -name "Afterglow.vst3" -path "*Release*" | head -n 1)
+          case "$RUNNER_OS" in
+            Windows) validator="pluginval/pluginval.exe" ;;
+            macOS)   validator="pluginval/pluginval.app/Contents/MacOS/pluginval" ;;
+            *)       validator="pluginval/pluginval" ;;
+          esac
+          chmod +x "$validator" || true
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            xvfb-run -a "$validator" --strictness-level 8 --validate-in-process --skip-gui-tests --timeout-ms 600000 --validate "$vst3"
+          else
+            "$validator" --strictness-level 8 --validate-in-process --timeout-ms 600000 --validate "$vst3"
+          fi
+
+      - name: Collect plugin files
+        shell: bash
+        run: |
+          mkdir -p dist
+          find build -type d -name "Afterglow.vst3" -path "*Release*" -exec cp -R {} dist/ \; -quit
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            find build -type f -name "Afterglow.exe" -path "*Standalone*" -exec cp {} dist/ \; -quit
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            find build -type d -name "Afterglow.component" -path "*Release*" -exec cp -R {} dist/ \; -quit
+            find build -type d -name "Afterglow.app" -path "*Release*" -exec cp -R {} dist/ \; -quit
+          else
+            find build -type f -name "Afterglow" -path "*Standalone*" -exec cp {} dist/ \; -quit
+          fi
+          cp README.md dist/
+          ls -la dist
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: Afterglow-${{ matrix.name }}
+          path: dist
+          if-no-files-found: error

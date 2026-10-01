@@ -10,8 +10,14 @@ AfterglowProcessor::AfterglowProcessor()
       state (*this, &undoManager, "AfterglowState", createParameterLayout())
 {
     cacheParameterPointers();
+
+    // The oversampling latency does not depend on the sample rate, so it can be reported before prepareToPlay.
+    for (int order = 0; order < 4; ++order)
+        latencyForOrder[static_cast<size_t> (order)] = dsp::DistortModule::latencyForOrder (order, 44100.0, 512);
+
     state.addParameterListener (ParamIDs::quality, this);
     requestedOrder.store (qualityToOversamplingOrder (static_cast<int> (p.quality->load())));
+    setLatencySamples (latencyForOrder[static_cast<size_t> (requestedOrder.load())]);
 
     presetManager = std::make_unique<PresetManager> (state, &undoManager);
     presetManager->loadStartupPresetIfAny();
