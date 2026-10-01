@@ -54,7 +54,7 @@ juce_add_plugin(Afterglow
     NEEDS_MIDI_INPUT            FALSE
     NEEDS_MIDI_OUTPUT           FALSE
     IS_MIDI_EFFECT              FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     VST3_CATEGORIES             Fx Distortion
     AU_MAIN_TYPE                kAudioUnitType_Effect
     COPY_PLUGIN_AFTER_BUILD     ${AFTERGLOW_COPY_AFTER_BUILD}
@@ -86,8 +86,17 @@ set(AFTERGLOW_SOURCES
     source/dsp/MasterSection.cpp
     source/presets/PresetManager.cpp
     source/presets/FactoryPresets.cpp
-    # UI_SOURCES_PLACEHOLDER
-    )
+    source/ui/Theme.cpp
+    source/ui/AfterglowLookAndFeel.cpp
+    source/ui/Textures.cpp
+    source/ui/Controls.cpp
+    source/ui/Visualisers.cpp
+    source/ui/ModulePanels.cpp
+    source/ui/HeaderBar.cpp
+    source/ui/BigKnobRow.cpp
+    source/ui/MasterStrip.cpp
+    source/ui/PresetBrowser.cpp
+    source/ui/AboutPanel.cpp)
 
 target_sources(Afterglow PRIVATE ${AFTERGLOW_SOURCES})
 target_include_directories(Afterglow PUBLIC source)
