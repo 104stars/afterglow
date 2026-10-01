@@ -109,8 +109,71 @@ LedButton::LedButton (APVTS& state, const juce::String& paramId, const juce::Str
     attachment = std::make_unique<APVTS::ButtonAttachment> (state, paramId, *this);
 }
 
+int LedButton::getNameplateWidth() const
+{
+    const auto textWidth = juce::GlyphArrangement::getStringWidth (Fonts::get().labelBold (16.0f), getButtonText());
+    return juce::roundToInt (8.0f + 7.0f + textWidth + 2.0f * 11.0f);
+}
+
+void LedButton::paintNameplate (juce::Graphics& g, bool isMouseOver, bool isButtonDown)
+{
+    // The module name engraved on the cream panel doubles as its on/off switch (like RC-20):
+    // an indicator lamp, the title, and a faint engraved plate that strengthens on hover.
+    const auto on = getToggleState();
+    auto area = getLocalBounds().toFloat().reduced (0.5f);
+    if (isButtonDown)
+        area.translate (0.0f, 0.5f);
+
+    const auto outline = isMouseOver ? 0.24f : 0.12f;
+    g.setColour (juce::Colours::black.withAlpha (outline));
+    g.drawRoundedRectangle (area, 4.0f, 1.0f);
+    g.setColour (juce::Colours::white.withAlpha (isMouseOver ? 0.7f : 0.5f));
+    g.drawLine (area.getX() + 4.0f, area.getBottom() + 0.5f, area.getRight() - 4.0f, area.getBottom() + 0.5f, 1.0f);
+    if (isMouseOver)
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.18f));
+        g.fillRoundedRectangle (area.reduced (1.0f), 3.5f);
+    }
+
+    const auto font = Fonts::get().labelBold (16.0f);
+    const auto textWidth = juce::GlyphArrangement::getStringWidth (font, getButtonText());
+    const auto groupWidth = 8.0f + 7.0f + textWidth;
+    const auto x0 = area.getCentreX() - groupWidth * 0.5f;
+    const auto lamp = juce::Rectangle<float> (8.0f, 8.0f).withCentre ({ x0 + 4.0f, area.getCentreY() });
+
+    // Recessed indicator lamp.
+    g.setColour (juce::Colours::white.withAlpha (0.6f));
+    g.fillEllipse (lamp.expanded (1.2f).translated (0.0f, 0.6f));
+    g.setColour (juce::Colour (0xff4a463a));
+    g.fillEllipse (lamp.expanded (1.0f));
+    if (on)
+    {
+        g.setColour (led.withAlpha (0.35f));
+        g.fillEllipse (lamp.expanded (3.5f));
+        juce::ColourGradient lit (led.brighter (0.5f), lamp.getCentreX(), lamp.getY(), led.darker (0.3f), lamp.getCentreX(), lamp.getBottom(), false);
+        g.setGradientFill (lit);
+    }
+    else
+    {
+        juce::ColourGradient dark (juce::Colour (0xff2a2922), lamp.getCentreX(), lamp.getY(), juce::Colour (0xff3b3a2c), lamp.getCentreX(), lamp.getBottom(), false);
+        g.setGradientFill (dark);
+    }
+    g.fillEllipse (lamp);
+    g.setColour (juce::Colours::white.withAlpha (on ? 0.6f : 0.15f));
+    g.fillEllipse (lamp.withSizeKeepingCentre (3.0f, 2.0f).translated (-1.0f, -1.5f));
+
+    const auto textArea = juce::Rectangle<float> (x0 + 15.0f, area.getY(), textWidth + 2.0f, area.getHeight());
+    drawEngravedText (g, getButtonText(), textArea, font, Colours::ink.withAlpha (on ? 0.85f : 0.4f), juce::Justification::centredLeft, false);
+}
+
 void LedButton::paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown)
 {
+    if (look == Look::nameplate)
+    {
+        paintNameplate (g, isMouseOver, isButtonDown);
+        return;
+    }
+
     const auto on = getToggleState();
     auto area = getLocalBounds().toFloat().reduced (1.0f);
 
@@ -193,9 +256,10 @@ void LedButton::paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonD
     g.fillRoundedRectangle (ledArea, 1.4f);
 
     const auto textArea = area.withTrimmedTop (7.0f);
-    g.setFont (Fonts::get().label (std::min (13.0f, textArea.getHeight() * 0.8f)));
+    const auto legend = (! on && offText.isNotEmpty()) ? offText : getButtonText();
+    g.setFont (Fonts::get().label (13.0f));
     g.setColour (on ? Colours::silkscreen : Colours::silkscreen.withAlpha (0.7f));
-    g.drawText (getButtonText(), textArea, juce::Justification::centred, false);
+    g.drawText (legend, textArea, juce::Justification::centred, false);
 }
 
 //======================================================================================================================

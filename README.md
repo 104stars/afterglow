@@ -22,14 +22,29 @@ early-sampler grit, vintage reverbs and worn-tape artefacts, all brought to life
   output gain, global dry/wet Mix, soft safety limiter and two analogue VU meters.
 * **Presets**: 40 factory presets in 9 categories, user presets, a browser you can tweak while browsing
   (OK keeps, Cancel restores), a startup preset, and undo/redo.
-* **Skeuomorphic interface**: walnut cheeks, enamel faceplates, knurled knobs, illuminated buttons, animated glass
-  displays (oscilloscope, glowing valves, stepped samples, reverb ripples, spinning reels) and perforated covers for
-  switched-off modules. Resizable from 60 % to 220 %, sharp on high-DPI screens.
+* **Skeuomorphic interface**: walnut cheeks, enamel faceplates, knurled knobs, illuminated nameplate switches, animated
+  glass displays with live readouts (noise oscilloscope, glowing valves, stepped samples, a reverb echogram and a
+  reel-to-reel transport) and perforated covers for switched-off modules. Resizable from 60 % to 220 %, sharp on high-DPI screens.
 * **Quality**: every module is exactly transparent at 0 %, latency is reported and compensated, and the test suite
   covers null tests, latency, stability fuzzing, presets, calibration and aliasing. See
   [docs/RESEARCH.md](docs/RESEARCH.md) for the full RC-20 analysis, DSP design and measurements.
 
-![Preset browser](docs/images/preset-browser.jpg)
+### Screenshots
+
+| | |
+|---|---|
+| ![Switched-off modules](docs/images/modules-off.jpg) | ![Preset browser](docs/images/preset-browser.jpg) |
+| Switched-off modules sit behind perforated covers; click a cover or a nameplate to enable the module. | The preset browser can be used while audio plays; OK keeps the choice, Cancel restores the previous sound. |
+
+Module displays (each shows a live readout in the corner chip):
+
+![Displays with tape settings](docs/images/displays-tape.jpg)
+![Displays with a plate reverb](docs/images/displays-plate.jpg)
+
+Big knob row with the illuminated nameplate switches, and the master strip:
+
+![Big knob row](docs/images/big-knob-row.jpg)
+![Master strip](docs/images/master-strip.jpg)
 
 ## Download a ready-made build
 

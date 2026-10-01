@@ -5,10 +5,10 @@ namespace afterglow
 {
 namespace
 {
-    constexpr int cheekWidth = 26;
-    constexpr int headerHeight = 84;
-    constexpr int bayHeight = 346;
-    constexpr int bigKnobHeight = 148;
+    using ui::Layout::cheekWidth;
+    using ui::Layout::headerHeight;
+    using ui::Layout::bayHeight;
+    using ui::Layout::bigKnobHeight;
 } // namespace
 
 //======================================================================================================================
@@ -58,11 +58,9 @@ void MainPanel::resized()
     header.setBounds (inner.getX(), 0, inner.getWidth(), headerHeight);
     bayArea = { inner.getX(), headerHeight, inner.getWidth(), bayHeight };
 
-    const auto gap = 8;
-    const auto margin = 10;
-    const auto moduleWidth = (bayArea.getWidth() - 2 * margin - 5 * gap) / 6;
+    using namespace ui::Layout;
     for (size_t i = 0; i < modules.size(); ++i)
-        modules[i]->setBounds (bayArea.getX() + margin + static_cast<int> (i) * (moduleWidth + gap), bayArea.getY() + 8, moduleWidth, bayArea.getHeight() - 16);
+        modules[i]->setBounds (bayArea.getX() + bayMargin + static_cast<int> (i) * modulePitch, bayArea.getY() + 8, moduleWidth, bayArea.getHeight() - 16);
 
     bigKnobs.setBounds (inner.getX(), bayArea.getBottom(), inner.getWidth(), bigKnobHeight);
     master.setBounds (inner.getX(), bigKnobs.getBottom(), inner.getWidth(), getHeight() - bigKnobs.getBottom());

@@ -6,12 +6,44 @@ namespace afterglow::ui
 {
 namespace
 {
-    constexpr int knobW = 60;
-    constexpr int knobH = 70;
+    using namespace Layout;
 
-    juce::Rectangle<int> knobAt (juce::Rectangle<int> area, float centreXProportion, int y)
+    // Every panel uses the same grid (see Layout in Theme.h): a header row (selector or balance slider),
+    // two knob rows on a 74 px pitch, one keycap row, then Flux. Columns sit at 30 % / 50 % / 66 % / 70 %.
+    int columnX (juce::Rectangle<int> area, float proportion)
     {
-        return { area.getX() + juce::roundToInt (area.getWidth() * centreXProportion) - knobW / 2, y, knobW, knobH };
+        return area.getX() + juce::roundToInt (static_cast<float> (area.getWidth()) * proportion);
+    }
+
+    juce::Rectangle<int> knobAt (juce::Rectangle<int> area, float centreXProportion, int top)
+    {
+        return { columnX (area, centreXProportion) - knobWidth / 2, top, knobWidth, knobHeight };
+    }
+
+    /** Centre y of a knob's dial (the knob box minus its 13 px label). */
+    constexpr int dialCentre (int knobTop) { return knobTop + (knobHeight - 13) / 2; }
+
+    juce::Rectangle<int> keycapAt (int centreX, int centreY, int width = keycapWidth)
+    {
+        return juce::Rectangle<int> (width, keycapHeight).withCentre ({ centreX, centreY });
+    }
+
+    juce::Rectangle<int> selectorBounds (juce::Rectangle<int> area)
+    {
+        return { panelMargin, headerRowTop + 4, area.getRight() + area.getX() - 2 * panelMargin, 24 };
+    }
+
+    void layoutBalance (juce::Rectangle<int>& caption, juce::Slider& slider, juce::Rectangle<int> area)
+    {
+        const auto width = area.getRight() + area.getX();
+        caption = { 6, headerRowTop, width - 12, 14 };
+        slider.setBounds (panelMargin, headerRowTop + 14, width - 2 * panelMargin, 22);
+    }
+
+    void layoutFocus (RangeSlider& focus, juce::Rectangle<int>& caption)
+    {
+        focus.setBounds (18, focusTop, 28, focusHeight);
+        caption = { 8, focusTop + focusHeight + 4, 48, 14 };
     }
 } // namespace
 
@@ -66,7 +98,7 @@ void Hatch::paint (juce::Graphics& g)
         hg.setColour (juce::Colours::black.withAlpha (0.45f));
         hg.drawRoundedRectangle (plate, 4.0f, 1.0f);
         drawEngravedText (hg, title.toUpperCase(), plate.withTrimmedBottom (18.0f).translated (0.0f, 4.0f), Fonts::get().labelBold (17.0f), juce::Colour (0xff2c2416), juce::Justification::centred, false);
-        drawEngravedText (hg, "OFF  -  CLICK TO ENABLE", plate.withTrimmedTop (26.0f), Fonts::get().label (10.5f), juce::Colour (0xff3e3320), juce::Justification::centred, false);
+        drawEngravedText (hg, juce::String (juce::CharPointer_UTF8 ("OFF \xc2\xb7 CLICK TO ENABLE")), plate.withTrimmedTop (26.0f), Fonts::get().label (10.5f), juce::Colour (0xff3e3320), juce::Justification::centred, false);
 
         // Frame and screws.
         hg.setColour (juce::Colours::black.withAlpha (0.8f));
@@ -121,14 +153,15 @@ void ModulePanel::resized()
 {
     const auto bounds = getLocalBounds();
 
+    // One 14 px content margin all round: display, selectors, divider and Flux share the same edges.
     if (display != nullptr)
-        display->setBounds (14, 10, bounds.getWidth() - 28, 62);
+        display->setBounds (Layout::panelMargin, Layout::displayTop, bounds.getWidth() - 2 * Layout::panelMargin, Layout::displayHeight);
 
-    const auto fluxArea = juce::Rectangle<int> (10, bounds.getHeight() - 32, bounds.getWidth() - 20, 24);
+    const auto fluxArea = juce::Rectangle<int> (Layout::panelMargin, bounds.getHeight() - 31, bounds.getWidth() - 2 * Layout::panelMargin, 22);
     fluxCaptionArea = fluxArea.withWidth (36);
     flux.setBounds (fluxArea.withTrimmedLeft (38));
 
-    layoutControls (juce::Rectangle<int> (6, 80, bounds.getWidth() - 12, bounds.getHeight() - 80 - 36));
+    layoutControls (juce::Rectangle<int> (6, 0, bounds.getWidth() - 12, bounds.getHeight()));
     hatch.setBounds (bounds);
     updateHatch();
 }
@@ -231,7 +264,7 @@ void ModulePanel::paint (juce::Graphics& g)
 
     // Flux caption with a small random-walk glyph.
     const auto fc = fluxCaptionArea.toFloat();
-    drawEngravedText (g, "FLUX", fc.withTrimmedBottom (8.0f), Fonts::get().labelBold (12.5f), ink, juce::Justification::centredLeft, true);
+    drawEngravedText (g, "FLUX", fc.withTrimmedBottom (8.0f), Fonts::get().labelBold (13.0f), ink, juce::Justification::centredLeft, true);
     juce::Path squiggle;
     squiggle.startNewSubPath (fc.getX(), fc.getBottom() - 5.0f);
     const float pts[] { 0.0f, -3.0f, 1.5f, -2.0f, 2.5f, -0.5f, 1.0f };
@@ -261,11 +294,11 @@ NoisePanel::NoisePanel (APVTS& s, dsp::EngineTelemetry& t)
 
 void NoisePanel::layoutControls (juce::Rectangle<int> area)
 {
-    type.setBounds (area.getX() + 4, area.getY() + 4, area.getWidth() - 8, 24);
-    tone.setBounds (knobAt (area, 0.3f, area.getY() + 38));
-    post.setBounds (juce::Rectangle<int> (54, 28).withCentre ({ area.getX() + juce::roundToInt (area.getWidth() * 0.7f), area.getY() + 66 }));
-    follow.setBounds (knobAt (area, 0.3f, area.getY() + 118));
-    duck.setBounds (knobAt (area, 0.7f, area.getY() + 118));
+    type.setBounds (selectorBounds (area));
+    tone.setBounds (knobAt (area, 0.3f, rowATop));
+    post.setBounds (keycapAt (columnX (area, 0.7f), dialCentre (rowATop)));
+    follow.setBounds (knobAt (area, 0.3f, rowBTop));
+    duck.setBounds (knobAt (area, 0.7f, rowBTop));
 }
 
 //======================================================================================================================
@@ -312,13 +345,13 @@ void WobblePanel::refresh (double seconds)
 
 void WobblePanel::layoutControls (juce::Rectangle<int> area)
 {
-    balanceCaption = { area.getX(), area.getY() + 2, area.getWidth(), 14 };
-    balance.setBounds (area.getX() + 8, area.getY() + 17, area.getWidth() - 16, 22);
-    wowRate.setBounds (knobAt (area, 0.3f, area.getY() + 46));
-    flutterRate.setBounds (knobAt (area, 0.7f, area.getY() + 46));
-    sync.setBounds (juce::Rectangle<int> (54, 24).withCentre ({ area.getX() + juce::roundToInt (area.getWidth() * 0.3f), area.getY() + 136 }));
-    stereo.setBounds (juce::Rectangle<int> (54, 24).withCentre ({ area.getX() + juce::roundToInt (area.getWidth() * 0.3f), area.getY() + 166 }));
-    mix.setBounds (knobAt (area, 0.7f, area.getY() + 120));
+    layoutBalance (balanceCaption, balance, area);
+    wowRate.setBounds (knobAt (area, 0.3f, rowATop));
+    flutterRate.setBounds (knobAt (area, 0.7f, rowATop));
+    // SYNC and STEREO stacked on a 30 px pitch, centred on the MIX dial beside them.
+    sync.setBounds (keycapAt (columnX (area, 0.3f), dialCentre (rowBTop) - 15));
+    stereo.setBounds (keycapAt (columnX (area, 0.3f), dialCentre (rowBTop) + 15));
+    mix.setBounds (knobAt (area, 0.7f, rowBTop));
 }
 
 void WobblePanel::paintSilkscreen (juce::Graphics& g)
@@ -343,11 +376,10 @@ DistortPanel::DistortPanel (APVTS& s, dsp::EngineTelemetry& t)
 
 void DistortPanel::layoutControls (juce::Rectangle<int> area)
 {
-    type.setBounds (area.getX() + 4, area.getY() + 4, area.getWidth() - 8, 24);
-    focus.setBounds (area.getX() + 12, area.getY() + 38, 28, 136);
-    focusCaption = { area.getX() + 2, area.getY() + 176, 48, 14 };
-    tone.setBounds (knobAt (area, 0.66f, area.getY() + 36));
-    mix.setBounds (knobAt (area, 0.66f, area.getY() + 116));
+    type.setBounds (selectorBounds (area));
+    layoutFocus (focus, focusCaption);
+    tone.setBounds (knobAt (area, 0.66f, rowATop));
+    mix.setBounds (knobAt (area, 0.66f, rowBTop));
 }
 
 void DistortPanel::paintSilkscreen (juce::Graphics& g)
@@ -376,14 +408,12 @@ DigitalPanel::DigitalPanel (APVTS& s, dsp::EngineTelemetry& t)
 
 void DigitalPanel::layoutControls (juce::Rectangle<int> area)
 {
-    balanceCaption = { area.getX(), area.getY() + 2, area.getWidth(), 14 };
-    balance.setBounds (area.getX() + 8, area.getY() + 17, area.getWidth() - 16, 22);
-    focus.setBounds (area.getX() + 12, area.getY() + 46, 28, 112);
-    focusCaption = { area.getX() + 2, area.getY() + 160, 48, 14 };
-    smooth.setBounds (knobAt (area, 0.66f, area.getY() + 42));
-    mix.setBounds (knobAt (area, 0.66f, area.getY() + 112));
-    cut.setBounds (area.getX() + 4, area.getY() + 186, 44, 24);
-    compand.setBounds (juce::Rectangle<int> (72, 24).withCentre ({ area.getX() + juce::roundToInt (area.getWidth() * 0.66f), 0 }).withY (area.getY() + 186));
+    layoutBalance (balanceCaption, balance, area);
+    layoutFocus (focus, focusCaption);
+    smooth.setBounds (knobAt (area, 0.66f, rowATop));
+    mix.setBounds (knobAt (area, 0.66f, rowBTop));
+    cut.setBounds (keycapAt (32, buttonRowTop + keycapHeight / 2, 44));
+    compand.setBounds (keycapAt (columnX (area, 0.66f), buttonRowTop + keycapHeight / 2, 72));
 }
 
 void DigitalPanel::paintSilkscreen (juce::Graphics& g)
@@ -410,12 +440,11 @@ SpacePanel::SpacePanel (APVTS& s, dsp::EngineTelemetry& t)
 
 void SpacePanel::layoutControls (juce::Rectangle<int> area)
 {
-    type.setBounds (area.getX() + 4, area.getY() + 4, area.getWidth() - 8, 24);
-    focus.setBounds (area.getX() + 12, area.getY() + 38, 28, 136);
-    focusCaption = { area.getX() + 2, area.getY() + 176, 48, 14 };
-    decay.setBounds (knobAt (area, 0.66f, area.getY() + 34));
-    preDelay.setBounds (knobAt (area, 0.66f, area.getY() + 106));
-    stereo.setBounds (juce::Rectangle<int> (60, 24).withCentre ({ area.getX() + juce::roundToInt (area.getWidth() * 0.66f), area.getY() + 194 }));
+    type.setBounds (selectorBounds (area));
+    layoutFocus (focus, focusCaption);
+    decay.setBounds (knobAt (area, 0.66f, rowATop));
+    preDelay.setBounds (knobAt (area, 0.66f, rowBTop));
+    stereo.setBounds (keycapAt (columnX (area, 0.66f), buttonRowTop + keycapHeight / 2));
 }
 
 void SpacePanel::paintSilkscreen (juce::Graphics& g)
@@ -448,12 +477,12 @@ void MagneticPanel::refresh (double seconds)
 
 void MagneticPanel::layoutControls (juce::Rectangle<int> area)
 {
-    balanceCaption = { area.getX(), area.getY() + 2, area.getWidth(), 14 };
-    balance.setBounds (area.getX() + 8, area.getY() + 17, area.getWidth() - 16, 22);
-    sync.setBounds (juce::Rectangle<int> (54, 24).withCentre ({ area.getX() + juce::roundToInt (area.getWidth() * 0.3f), area.getY() + 64 }));
-    stereo.setBounds (juce::Rectangle<int> (54, 24).withCentre ({ area.getX() + juce::roundToInt (area.getWidth() * 0.3f), area.getY() + 96 }));
-    rate.setBounds (knobAt (area, 0.7f, area.getY() + 46));
-    dropouts.setBounds (knobAt (area, 0.5f, area.getY() + 122));
+    layoutBalance (balanceCaption, balance, area);
+    // SYNC and STEREO stacked on a 30 px pitch, centred on the RATE dial they relate to.
+    sync.setBounds (keycapAt (columnX (area, 0.3f), dialCentre (rowATop) - 15));
+    stereo.setBounds (keycapAt (columnX (area, 0.3f), dialCentre (rowATop) + 15));
+    rate.setBounds (knobAt (area, 0.7f, rowATop));
+    dropouts.setBounds (knobAt (area, 0.5f, rowBTop));
 }
 
 void MagneticPanel::paintSilkscreen (juce::Graphics& g)

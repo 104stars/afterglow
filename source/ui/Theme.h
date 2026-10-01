@@ -8,6 +8,39 @@ namespace afterglow::ui
 inline constexpr int designWidth = 1120;
 inline constexpr int designHeight = 720;
 
+/** Shared layout grid. The module bay and the big-knob row use the same columns so every big knob sits
+    exactly under its module. */
+namespace Layout
+{
+    inline constexpr int cheekWidth = 26;
+    inline constexpr int innerWidth = designWidth - 2 * cheekWidth; // 1068
+    inline constexpr int headerHeight = 84;
+    inline constexpr int bayHeight = 346;
+    inline constexpr int bigKnobHeight = 154;
+    inline constexpr int bayMargin = 10;   // from the inner edge to the first module
+    inline constexpr int moduleGap = 8;
+    inline constexpr int moduleWidth = (innerWidth - 2 * bayMargin - 5 * moduleGap) / 6; // 168
+    inline constexpr int modulePitch = moduleWidth + moduleGap;                          // 176
+
+    /** Centre x of module column i, relative to the inner area (between the walnut cheeks). */
+    inline constexpr int columnCentre (int i) { return bayMargin + moduleWidth / 2 + i * modulePitch; }
+
+    // Module panel grid (panel coordinates), identical for all six modules.
+    inline constexpr int panelMargin = 14;
+    inline constexpr int displayTop = 14;
+    inline constexpr int displayHeight = 58;
+    inline constexpr int headerRowTop = 84;     // selector or balance caption
+    inline constexpr int rowATop = 124;         // first knob row (knob + label = 70)
+    inline constexpr int rowBTop = 198;         // second knob row
+    inline constexpr int knobWidth = 60;
+    inline constexpr int knobHeight = 70;
+    inline constexpr int buttonRowTop = 272;
+    inline constexpr int keycapHeight = 22;
+    inline constexpr int keycapWidth = 54;
+    inline constexpr int focusTop = 124;
+    inline constexpr int focusHeight = 120;
+} // namespace Layout
+
 namespace Colours
 {
     // Hardware materials
@@ -34,7 +67,7 @@ namespace Colours
     {
         static const juce::Colour colours[] {
             juce::Colour (0xff8e3b2e), // noise: oxblood
-            juce::Colour (0xffa87a26), // wobble: mustard
+            juce::Colour (0xff96691d), // wobble: mustard (darkened slightly so cream print keeps contrast)
             juce::Colour (0xff5f6e33), // distort: olive
             juce::Colour (0xff2c676b), // digital: teal
             juce::Colour (0xff3a5880), // space: slate blue

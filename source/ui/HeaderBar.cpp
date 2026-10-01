@@ -77,6 +77,7 @@ HeaderBar::HeaderBar (APVTS& state, PresetManager& p, juce::UndoManager& u)
     redoButton.onClick = [this] { undo.redo(); };
     browse.onClick = [this] { if (onBrowse) onBrowse(); };
     save.onClick = [this] { if (onSave) onSave(); };
+    magnitude.onValueChange = [this] { repaint (magnitudeCaption); };
 
     setBufferedToImage (true);
     refresh();
@@ -92,8 +93,9 @@ void HeaderBar::resized()
     save.setBounds (676, 44, 72, 22);
     undoButton.setBounds (754, 18, 28, 22);
     redoButton.setBounds (754, 44, 28, 22);
-    magnitudeCaption = { 800, 6, 254, 16 };
-    magnitude.setBounds (800, 26, 254, 34);
+    // Ends 20 px short of the corner screws; the group is centred on the header's middle like the display.
+    magnitudeCaption = { 800, 10, 236, 16 };
+    magnitude.setBounds (800, 28, 236, 30);
 }
 
 void HeaderBar::refresh()
@@ -199,9 +201,6 @@ void HeaderBar::paint (juce::Graphics& g)
         const auto nameArea = textArea.withTrimmedTop (12.0f);
         const auto nameFont = Fonts::get().display (22.0f);
         g.setFont (nameFont);
-        g.setColour (Colours::amber.withAlpha (0.2f));
-        for (auto off : { -1.0f, 1.0f })
-            g.drawFittedText (nameText, nameArea.translated (off, 0.0f).toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
         g.setColour (Colours::amber);
         g.drawFittedText (nameText, nameArea.toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
 
@@ -212,6 +211,9 @@ void HeaderBar::paint (juce::Graphics& g)
 
     // Magnitude caption and scale.
     drawEngravedText (g, "MAGNITUDE", magnitudeCaption.toFloat(), Fonts::get().labelBold (13.0f), Colours::silkscreen, juce::Justification::centredLeft, true);
+    g.setFont (Fonts::get().display (11.0f));
+    g.setColour (Colours::amber.withAlpha (0.8f));
+    g.drawText (juce::String (juce::roundToInt (magnitude.getValue())) + "%", magnitudeCaption.toFloat(), juce::Justification::centredRight, false);
     const auto fader = magnitude.getBounds().toFloat();
     for (int i = 0; i <= 10; ++i)
     {
@@ -220,10 +222,12 @@ void HeaderBar::paint (juce::Graphics& g)
         g.setColour (Colours::silkscreen.withAlpha (major ? 0.8f : 0.45f));
         g.drawLine (x, fader.getBottom() + 2.0f, x, fader.getBottom() + (major ? 8.0f : 5.0f), 1.0f);
     }
-    g.setFont (Fonts::get().label (10.0f));
-    g.setColour (Colours::silkscreen.withAlpha (0.6f));
-    g.drawText ("0", juce::Rectangle<float> (fader.getX() - 8.0f, fader.getBottom() + 8.0f, 24.0f, 12.0f), juce::Justification::centred, false);
-    g.drawText ("100", juce::Rectangle<float> (fader.getRight() - 16.0f, fader.getBottom() + 8.0f, 24.0f, 12.0f), juce::Justification::centred, false);
+    const auto scaleRow = juce::Rectangle<float> (fader.getX() + 4.0f, fader.getBottom() + 9.0f, fader.getWidth() - 8.0f, 12.0f);
+    const auto micro = Fonts::get().labelMedium (10.5f);
+    const auto print = Colours::silkscreen.withAlpha (0.65f);
+    drawEngravedText (g, "0", scaleRow, micro, print, juce::Justification::centredLeft, true);
+    drawEngravedText (g, "50", scaleRow, micro, print, juce::Justification::centred, true);
+    drawEngravedText (g, "100", scaleRow, micro, print, juce::Justification::centredRight, true);
 }
 
 } // namespace afterglow::ui

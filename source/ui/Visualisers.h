@@ -20,8 +20,16 @@ public:
 protected:
     virtual void drawContent (juce::Graphics& g, juce::Rectangle<float> screen) = 0;
 
+    /** Small numeric readout shown in a chip on the glass (empty for none). */
+    virtual juce::String readoutText() const { return {}; }
+    virtual juce::Colour readoutColour() const { return phosphor; }
+    virtual bool readoutAtTop() const { return false; }
+
     float param (const char* id) const;
     bool isActive() const;
+
+    /** Opacity of a screen's static layer (graticule, artwork): 30 % when off, full when on. */
+    float staticAlpha() const noexcept;
 
     juce::AudioProcessorValueTreeState& state;
     dsp::EngineTelemetry& telemetry;
@@ -30,6 +38,8 @@ protected:
     float activity = 0.0f; // smoothed "on" amount used for fading the content in and out
 
 private:
+    void drawReadout (juce::Graphics& g, juce::Rectangle<float> screen);
+
     std::atomic<float>* onParam = nullptr;
 };
 
@@ -41,8 +51,9 @@ public:
 
 private:
     void drawContent (juce::Graphics& g, juce::Rectangle<float> screen) override;
+    juce::String readoutText() const override;
     std::array<float, 160> trace {};
-    float gain = 1.0f;
+    float gain = 1.0f, levelDb = -90.0f;
 };
 
 class WobbleDisplay final : public ModuleDisplay
@@ -53,6 +64,7 @@ public:
 
 private:
     void drawContent (juce::Graphics& g, juce::Rectangle<float> screen) override;
+    juce::String readoutText() const override;
     double wowPhase = 0.0, flutterPhase = 0.0;
 };
 
@@ -64,7 +76,8 @@ public:
 
 private:
     void drawContent (juce::Graphics& g, juce::Rectangle<float> screen) override;
-    void drawTube (juce::Graphics& g, juce::Rectangle<float> area, float glow, float flicker) const;
+    juce::String readoutText() const override;
+    void drawTube (juce::Graphics& g, juce::Rectangle<float> area, float glow, float flicker, float alpha) const;
     float glow = 0.0f, flicker = 0.0f;
     juce::Random random;
 };
@@ -77,6 +90,7 @@ public:
 
 private:
     void drawContent (juce::Graphics& g, juce::Rectangle<float> screen) override;
+    juce::String readoutText() const override;
     float rate = 44100.0f, bits = 24.0f;
 };
 
@@ -88,9 +102,8 @@ public:
 
 private:
     void drawContent (juce::Graphics& g, juce::Rectangle<float> screen) override;
-    struct Ring { float age = 0.0f; float strength = 0.0f; int side = 0; };
-    std::vector<Ring> rings;
-    double spawnTimer = 0.0;
+    juce::String readoutText() const override;
+    float decaySeconds() const;
     float energy = 0.0f;
 };
 
@@ -102,8 +115,11 @@ public:
 
 private:
     void drawContent (juce::Graphics& g, juce::Rectangle<float> screen) override;
-    void drawReel (juce::Graphics& g, juce::Point<float> centre, float radius, float tapeRadius, float angle) const;
-    double reelAngle = 0.0;
+    juce::String readoutText() const override;
+    juce::Colour readoutColour() const override;
+    bool readoutAtTop() const override { return true; } // sits between the reels, like a tape counter
+    void drawReel (juce::Graphics& g, juce::Point<float> centre, float flange, float pack, float angle, float alpha, float live) const;
+    double leftAngle = 0.0, rightAngle = 0.0, transport = 0.15;
     float gain = 1.0f, dropout = 0.0f;
 };
 

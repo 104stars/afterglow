@@ -384,11 +384,13 @@ void AfterglowLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, in
 
         if (! isFlux && ! vertical)
         {
-            // Centre detent ticks above and below the slot (balance sliders).
-            g.setColour (slider.findColour (juce::Slider::rotarySliderOutlineColourId).withAlpha (0.75f));
+            // Centre index for balance sliders: a small printed triangle above the slot.
             const auto cx = area.getCentreX();
-            g.fillRect (juce::Rectangle<float> (cx - 0.6f, area.getY(), 1.2f, slot.getY() - area.getY() - 2.0f));
-            g.fillRect (juce::Rectangle<float> (cx - 0.6f, slot.getBottom() + 2.0f, 1.2f, area.getBottom() - slot.getBottom() - 2.0f));
+            const auto tipY = slot.getY() - 2.0f;
+            juce::Path notch;
+            notch.addTriangle (cx - 3.0f, tipY - 4.0f, cx + 3.0f, tipY - 4.0f, cx, tipY);
+            g.setColour (slider.findColour (juce::Slider::rotarySliderOutlineColourId).withAlpha (0.8f));
+            g.fillPath (notch);
         }
 
         const auto capW = isFlux ? 11.0f : 13.0f;
@@ -573,7 +575,26 @@ void AfterglowLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button
 
 juce::Font AfterglowLookAndFeel::getTextButtonFont (juce::TextButton&, int buttonHeight)
 {
-    return Fonts::get().label (std::min (17.0f, static_cast<float> (buttonHeight) * 0.62f));
+    // Same legend size as the keycaps; larger only for the big OK / CANCEL keys.
+    return Fonts::get().label (buttonHeight >= 30 ? 15.0f : 13.0f);
+}
+
+void AfterglowLookAndFeel::drawCornerResizer (juce::Graphics& g, int w, int h, bool isMouseOver, bool isMouseDragging)
+{
+    // Three short grooves machined into the corner instead of the stock grey grip.
+    const auto size = static_cast<float> (std::min (w, h));
+    const auto right = static_cast<float> (w) - 3.0f;
+    const auto bottom = static_cast<float> (h) - 3.0f;
+    const auto strength = isMouseDragging ? 1.0f : (isMouseOver ? 0.85f : 0.6f);
+
+    for (int i = 0; i < 3; ++i)
+    {
+        const auto d = size * (0.3f + 0.22f * static_cast<float> (i));
+        g.setColour (juce::Colours::black.withAlpha (0.55f * strength));
+        g.drawLine (right - d, bottom, right, bottom - d, 1.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.14f * strength));
+        g.drawLine (right - d + 1.0f, bottom + 1.0f, right + 1.0f, bottom - d + 1.0f, 1.0f);
+    }
 }
 
 void AfterglowLookAndFeel::drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int width, int height, bool isScrollbarVertical,
