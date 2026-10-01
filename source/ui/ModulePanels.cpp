@@ -43,7 +43,7 @@ namespace
     void layoutFocus (RangeSlider& focus, juce::Rectangle<int>& caption)
     {
         focus.setBounds (18, focusTop, 28, focusHeight);
-        caption = { 8, focusTop + focusHeight + 4, 48, 14 };
+        caption = { 8, rowBTop + knobHeight - 15, 48, 13 }; // same baseline as the knob labels beside it
     }
 } // namespace
 

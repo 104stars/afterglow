@@ -23,7 +23,10 @@ protected:
     /** Small numeric readout shown in a chip on the glass (empty for none). */
     virtual juce::String readoutText() const { return {}; }
     virtual juce::Colour readoutColour() const { return phosphor; }
-    virtual bool readoutAtTop() const { return false; }
+    /** Where the chip sits: bottom-right by default, top-right where a trace runs along the bottom, or centred
+        (between the reels, like a tape counter). */
+    enum class ReadoutPlace { bottomRight, topRight, centre };
+    virtual ReadoutPlace readoutPlace() const { return ReadoutPlace::bottomRight; }
 
     float param (const char* id) const;
     bool isActive() const;
@@ -103,6 +106,7 @@ public:
 private:
     void drawContent (juce::Graphics& g, juce::Rectangle<float> screen) override;
     juce::String readoutText() const override;
+    ReadoutPlace readoutPlace() const override { return ReadoutPlace::topRight; } // the tail and baseline run along the bottom
     float decaySeconds() const;
     float energy = 0.0f;
 };
@@ -117,7 +121,7 @@ private:
     void drawContent (juce::Graphics& g, juce::Rectangle<float> screen) override;
     juce::String readoutText() const override;
     juce::Colour readoutColour() const override;
-    bool readoutAtTop() const override { return true; } // sits between the reels, like a tape counter
+    ReadoutPlace readoutPlace() const override { return ReadoutPlace::centre; }
     void drawReel (juce::Graphics& g, juce::Point<float> centre, float flange, float pack, float angle, float alpha, float live) const;
     double leftAngle = 0.0, rightAngle = 0.0, transport = 0.15;
     float gain = 1.0f, dropout = 0.0f;

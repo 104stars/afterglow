@@ -214,20 +214,24 @@ void HeaderBar::paint (juce::Graphics& g)
     g.setFont (Fonts::get().display (11.0f));
     g.setColour (Colours::amber.withAlpha (0.8f));
     g.drawText (juce::String (juce::roundToInt (magnitude.getValue())) + "%", magnitudeCaption.toFloat(), juce::Justification::centredRight, false);
+    // The scale spans the cap's travel (inset by the thumb radius) so 0, 50 and 100 sit under the cap's centre.
     const auto fader = magnitude.getBounds().toFloat();
+    const auto inset = static_cast<float> (getLookAndFeel().getSliderThumbRadius (magnitude));
     for (int i = 0; i <= 10; ++i)
     {
-        const auto x = fader.getX() + 4.0f + (fader.getWidth() - 8.0f) * static_cast<float> (i) / 10.0f;
+        const auto x = fader.getX() + inset + (fader.getWidth() - 2.0f * inset) * static_cast<float> (i) / 10.0f;
         const auto major = i % 5 == 0;
         g.setColour (Colours::silkscreen.withAlpha (major ? 0.8f : 0.45f));
         g.drawLine (x, fader.getBottom() + 2.0f, x, fader.getBottom() + (major ? 8.0f : 5.0f), 1.0f);
     }
-    const auto scaleRow = juce::Rectangle<float> (fader.getX() + 4.0f, fader.getBottom() + 9.0f, fader.getWidth() - 8.0f, 12.0f);
+    const auto scaleRow = juce::Rectangle<float> (fader.getX() + inset - 12.0f, fader.getBottom() + 9.0f, fader.getWidth() - 2.0f * inset + 24.0f, 12.0f);
     const auto micro = Fonts::get().labelMedium (10.5f);
     const auto print = Colours::silkscreen.withAlpha (0.65f);
-    drawEngravedText (g, "0", scaleRow, micro, print, juce::Justification::centredLeft, true);
-    drawEngravedText (g, "50", scaleRow, micro, print, juce::Justification::centred, true);
-    drawEngravedText (g, "100", scaleRow, micro, print, juce::Justification::centredRight, true);
+    for (auto [value, text] : { std::pair { 0.0f, "0" }, std::pair { 0.5f, "50" }, std::pair { 1.0f, "100" } })
+    {
+        const auto x = fader.getX() + inset + (fader.getWidth() - 2.0f * inset) * value;
+        drawEngravedText (g, text, juce::Rectangle<float> (24.0f, 12.0f).withCentre ({ x, scaleRow.getCentreY() }), micro, print, juce::Justification::centred, true);
+    }
 }
 
 } // namespace afterglow::ui

@@ -48,10 +48,11 @@ void MasterStrip::resized()
 
     eqOn.setBounds (214, centreY - 17, 30, 34);
     lowHard.setBounds (keycap (254, 44));
-    cut.setBounds (304, centreY - 17, 262, 34);
-    highHard.setBounds (keycap (572, 44));
-    tone.setBounds (622, knobTop, 60, 70);
-    toneMode.setBounds (keycap (682, 40));
+    // 10 px inner padding on both sides of the EQ section; TONE sits midway between HIGH CUT and MODE.
+    cut.setBounds (304, centreY - 17, 254, 34);
+    highHard.setBounds (keycap (564, 44));
+    tone.setBounds (611, knobTop, 60, 70);
+    toneMode.setBounds (keycap (eqSection.getRight() - 10 - 40, 40));
 
     width.setBounds (736, knobTop, 60, 70);
     outGain.setBounds (798, knobTop, 60, 70);

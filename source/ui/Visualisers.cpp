@@ -105,8 +105,13 @@ void ModuleDisplay::drawReadout (juce::Graphics& g, juce::Rectangle<float> scree
     const auto w = juce::GlyphArrangement::getStringWidth (font, text) + 6.0f;
     const auto inner = screen.reduced (4.0f, 3.0f);
     auto chip = juce::Rectangle<float> (w, 12.0f);
-    chip = readoutAtTop() ? chip.withCentre ({ screen.getCentreX(), screen.getY() + screen.getHeight() * 0.42f })
-                          : chip.withPosition (inner.getRight() - w, inner.getBottom() - 12.0f);
+    switch (readoutPlace())
+    {
+        case ReadoutPlace::centre:   chip = chip.withCentre ({ screen.getCentreX(), screen.getY() + screen.getHeight() * 0.42f }); break;
+        case ReadoutPlace::topRight: chip = chip.withPosition (inner.getRight() - w, inner.getY()); break;
+        case ReadoutPlace::bottomRight:
+        default:                     chip = chip.withPosition (inner.getRight() - w, inner.getBottom() - 12.0f); break;
+    }
 
     g.setColour (juce::Colours::black.withAlpha (0.6f * activity));
     g.fillRoundedRectangle (chip, 2.0f);
