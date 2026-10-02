@@ -17,7 +17,7 @@ PresetManager::PresetManager (juce::AudioProcessorValueTreeState& s, juce::UndoM
     startupName = openSettings()->getValue ("startupPreset");
     refreshUserPresets();
     currentIndex = 0;
-    currentName = presets.empty() ? juce::String ("Init") : presets.front().name;
+    storeCurrentName (presets.empty() ? juce::String ("Init") : presets.front().name);
 }
 
 PresetManager::~PresetManager()
@@ -55,6 +55,18 @@ void PresetManager::parameterChanged (const juce::String& parameterID, float)
         dirty.store (true);
 }
 
+juce::String PresetManager::getCurrentPresetName() const
+{
+    const juce::SpinLock::ScopedLockType lock (nameLock);
+    return currentName;
+}
+
+void PresetManager::storeCurrentName (const juce::String& name)
+{
+    const juce::SpinLock::ScopedLockType lock (nameLock);
+    currentName = name;
+}
+
 void PresetManager::runWhileLoading (const std::function<void()>& fn)
 {
     ++loadingDepth;
@@ -84,7 +96,7 @@ bool PresetManager::readPresetFile (const juce::File& file, Preset& preset)
 
 void PresetManager::refreshUserPresets()
 {
-    const auto previousName = currentName;
+    const auto previousName = getCurrentPresetName();
     presets = getFactoryPresets();
 
     std::vector<Preset> user;
@@ -171,7 +183,7 @@ bool PresetManager::loadPreset (int index)
     const auto& preset = presets[static_cast<size_t> (index)];
     applyValues (preset.values);
     currentIndex = index;
-    currentName = preset.name;
+    storeCurrentName (preset.name);
     dirty.store (false);
     return true;
 }
@@ -246,7 +258,7 @@ bool PresetManager::saveUserPreset (const juce::String& name, const juce::String
         return false;
     }
 
-    currentName = cleanName;
+    storeCurrentName (cleanName);
     refreshUserPresets();
     dirty.store (false);
     return true;
@@ -313,8 +325,8 @@ bool PresetManager::renameUserPreset (int index, const juce::String& newName, ju
     if (target != preset.file)
         preset.file.deleteFile();
 
-    if (currentName == preset.name)
-        currentName = cleanName;
+    if (getCurrentPresetName() == preset.name)
+        storeCurrentName (cleanName);
 
     if (getStartupPresetName() == preset.name)
     {
@@ -331,14 +343,24 @@ bool PresetManager::renameUserPreset (int index, const juce::String& newName, ju
 void PresetManager::setCurrentPresetName (const juce::String& name, bool dirtyFlag)
 {
     if (name.isNotEmpty())
-        currentName = name;
-
-    currentIndex = -1;
-    for (size_t i = 0; i < presets.size(); ++i)
-        if (presets[i].name == currentName)
-            currentIndex = static_cast<int> (i);
+        storeCurrentName (name);
 
     dirty.store (dirtyFlag);
+
+    // The preset list belongs to the message thread; when the host restores state from another thread, the
+    // processor resolves the index there afterwards (see resolveCurrentIndex).
+    if (juce::MessageManager::existsAndIsCurrentThread())
+        resolveCurrentIndex();
+}
+
+void PresetManager::resolveCurrentIndex()
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    const auto name = getCurrentPresetName();
+    currentIndex = -1;
+    for (size_t i = 0; i < presets.size(); ++i)
+        if (presets[i].name == name)
+            currentIndex = static_cast<int> (i);
 }
 
 void PresetManager::setStartupPreset (int index)
@@ -371,19 +393,19 @@ void PresetManager::loadStartupPresetIfAny()
 
     // Otherwise start from the parameter defaults, which match the first factory preset.
     currentIndex = presets.empty() ? -1 : 0;
-    currentName = presets.empty() ? juce::String ("Init") : presets.front().name;
+    storeCurrentName (presets.empty() ? juce::String ("Init") : presets.front().name);
     dirty.store (false);
 }
 
 PresetManager::Snapshot PresetManager::takeSnapshot() const
 {
-    return { captureValues(), currentName, currentIndex, dirty.load() };
+    return { captureValues(), getCurrentPresetName(), currentIndex, dirty.load() };
 }
 
 void PresetManager::restoreSnapshot (const Snapshot& snapshot)
 {
     applyValues (snapshot.values);
-    currentName = snapshot.name;
+    storeCurrentName (snapshot.name);
     currentIndex = snapshot.index;
     dirty.store (snapshot.dirty);
 }

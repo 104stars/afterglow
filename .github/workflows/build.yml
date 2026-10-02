@@ -58,6 +58,13 @@ jobs:
           echo "Running $exe"
           if [ "$RUNNER_OS" == "Linux" ]; then xvfb-run -a "$exe"; else "$exe"; fi
 
+      - name: Run lifecycle test (create, close and remove instances across JUCE shutdowns)
+        shell: bash
+        run: |
+          exe=$(find build -type f \( -name "AfterglowLifecycleTest" -o -name "AfterglowLifecycleTest.exe" \) -path "*Release*" | head -n 1)
+          echo "Running $exe"
+          if [ "$RUNNER_OS" == "Linux" ]; then xvfb-run -a "$exe"; else "$exe"; fi
+
       - name: Validate VST3 with pluginval
         shell: bash
         run: |
@@ -71,9 +78,9 @@ jobs:
           esac
           chmod +x "$validator" || true
           if [ "$RUNNER_OS" == "Linux" ]; then
-            xvfb-run -a "$validator" --strictness-level 8 --validate-in-process --skip-gui-tests --timeout-ms 600000 --validate "$vst3"
+            xvfb-run -a "$validator" --strictness-level 10 --validate-in-process --skip-gui-tests --timeout-ms 600000 --validate "$vst3"
           else
-            "$validator" --strictness-level 8 --validate-in-process --timeout-ms 600000 --validate "$vst3"
+            "$validator" --strictness-level 10 --validate-in-process --timeout-ms 600000 --validate "$vst3"
           fi
 
       - name: Collect plugin files

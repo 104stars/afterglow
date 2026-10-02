@@ -163,43 +163,42 @@ void ModulePanel::resized()
 
     layoutControls (juce::Rectangle<int> (6, 0, bounds.getWidth() - 12, bounds.getHeight()));
     hatch.setBounds (bounds);
-    updateHatch();
+    updateHatch (0.0);
 }
 
 void ModulePanel::refresh (double seconds)
 {
     if (display != nullptr)
         display->tick (seconds);
-    updateHatch();
+    updateHatch (seconds);
 }
 
-void ModulePanel::updateHatch()
+void ModulePanel::updateHatch (double seconds)
 {
+    // The cover fades in about 140 ms, driven by the editor's own animation timer. (JUCE's global Desktop animator
+    // is shared by every plugin in the host process and keeps proxy components alive on its own timer, which can
+    // outlive this editor.)
     const auto on = onParam == nullptr || onParam->load (std::memory_order_relaxed) > 0.5f;
+    const auto target = on ? 0.0f : 1.0f;
+    const auto previous = hatchAlpha;
 
     if (! hatchInitialised)
     {
-        // First time: show the current state without animating.
-        hatchInitialised = true;
-        lastOn = on;
-        hatch.setAlpha (1.0f);
-        hatch.setVisible (! on);
-        if (! on)
-            hatch.toFront (false);
-        return;
+        hatchInitialised = true; // first time: show the current state without animating
+        hatchAlpha = target;
     }
-
-    if (on == lastOn)
-        return;
-
-    lastOn = on;
-    if (on)
-        juce::Desktop::getInstance().getAnimator().fadeOut (&hatch, 140);
     else
     {
-        hatch.toFront (false);
-        juce::Desktop::getInstance().getAnimator().fadeIn (&hatch, 140);
+        const auto step = static_cast<float> (seconds / 0.14);
+        hatchAlpha = target > hatchAlpha ? std::min (target, hatchAlpha + step) : std::max (target, hatchAlpha - step);
     }
+
+    const auto visible = hatchAlpha > 0.0f;
+    if (visible && ! hatch.isVisible())
+        hatch.toFront (false);
+    hatch.setVisible (visible);
+    if (! juce::approximatelyEqual (previous, hatchAlpha) || ! juce::approximatelyEqual (hatch.getAlpha(), hatchAlpha))
+        hatch.setAlpha (hatchAlpha);
 }
 
 void ModulePanel::drawCaption (juce::Graphics& g, const juce::String& text, juce::Rectangle<int> area) const

@@ -56,7 +56,7 @@ protected:
     juce::Rectangle<int> fluxCaptionArea;
 
 private:
-    void updateHatch();
+    void updateHatch (double seconds);
     void paintFaceplate (juce::Graphics& g, float scale);
 
     // The faceplate artwork is cached per scale by hand (not with setBufferedToImage, which would also cache the
@@ -66,7 +66,7 @@ private:
 
     Hatch hatch;
     std::atomic<float>* onParam = nullptr;
-    bool lastOn = true;
+    float hatchAlpha = 0.0f;
     bool hatchInitialised = false;
 };
 

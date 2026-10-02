@@ -188,10 +188,13 @@ AfterglowEditor::AfterglowEditor (AfterglowProcessor& p)
 
 AfterglowEditor::~AfterglowEditor()
 {
+    // Stop everything that could call back into this editor, then let go of the look-and-feel before it is
+    // destroyed. Popup menus are separate desktop windows that would otherwise outlive the editor (and its
+    // look-and-feel) when the host closes the window or removes the plugin while a menu is open.
     stopTimer();
+    juce::PopupMenu::dismissAllActiveMenus();
     removeMouseListener (this);
-    if (tooltips != nullptr)
-        tooltips->setLookAndFeel (nullptr);
+    tooltips.reset();
     setLookAndFeel (nullptr);
 }
 

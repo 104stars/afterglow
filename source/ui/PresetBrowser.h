@@ -44,6 +44,11 @@ private:
         startupButton { "SET AS STARTUP" }, folderButton { "OPEN FOLDER" };
     juce::Rectangle<int> infoArea;
     bool suppressLoad = false;
+
+    // Dialogs are owned here (not left to the desktop), so closing the plugin window or removing the plugin while
+    // one is open closes it too, instead of leaving it pointing at a deleted editor and look-and-feel.
+    std::unique_ptr<juce::AlertWindow> renameWindow;
+    juce::ScopedMessageBox messageBox;
 };
 
 //======================================================================================================================

@@ -7,7 +7,7 @@ AfterglowProcessor::AfterglowProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      state (*this, &undoManager, "AfterglowState", createParameterLayout())
+      state (*this, &undoManager, stateType, createParameterLayout())
 {
     cacheParameterPointers();
 
@@ -27,6 +27,7 @@ AfterglowProcessor::AfterglowProcessor()
 AfterglowProcessor::~AfterglowProcessor()
 {
     state.removeParameterListener (ParamIDs::quality, this);
+    cancelPendingUpdate();
 }
 
 void AfterglowProcessor::cacheParameterPointers()
@@ -65,10 +66,39 @@ void AfterglowProcessor::parameterChanged (const juce::String& parameterID, floa
 {
     if (parameterID == ParamIDs::quality)
     {
-        const auto order = qualityToOversamplingOrder (juce::roundToInt (newValue));
-        requestedOrder.store (order);
-        setLatencySamples (latencyForOrder[static_cast<size_t> (order)]);
+        // The audio thread picks the new order up at the next block. Telling the host about the new latency must
+        // happen on the message thread (hosts may crash when it comes from the audio thread, as automation can).
+        requestedOrder.store (qualityToOversamplingOrder (juce::roundToInt (newValue)));
+        latencyChangePending.store (true);
+        if (juce::MessageManager::existsAndIsCurrentThread())
+            handleAsyncUpdate();
+        else
+            triggerAsyncUpdate();
     }
+}
+
+void AfterglowProcessor::handleAsyncUpdate()
+{
+    if (latencyChangePending.exchange (false))
+        setLatencySamples (latencyForOrder[static_cast<size_t> (requestedOrder.load())]);
+
+    juce::ValueTree restored;
+    {
+        const juce::ScopedLock lock (pendingStateLock);
+        std::swap (restored, pendingState);
+    }
+    if (restored.isValid())
+        applyStateOnMessageThread (restored);
+}
+
+void AfterglowProcessor::applyStateOnMessageThread (const juce::ValueTree& tree)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    const auto presetName = tree.getProperty ("presetName").toString();
+    const auto dirty = static_cast<bool> (tree.getProperty ("presetDirty", false));
+
+    presetManager->runWhileLoading ([&] { state.replaceState (tree.createCopy()); }); // also clears the undo history
+    presetManager->setCurrentPresetName (presetName, dirty);
 }
 
 void AfterglowProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -86,9 +116,14 @@ void AfterglowProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
     for (auto& d : bypassDelay)
         d.allocate (1024);
+
+    prepared.store (true);
 }
 
-void AfterglowProcessor::releaseResources() {}
+void AfterglowProcessor::releaseResources()
+{
+    prepared.store (false);
+}
 
 bool AfterglowProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
@@ -211,7 +246,7 @@ void AfterglowProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     for (auto ch = numIn; ch < numOut; ++ch)
         buffer.clear (ch, 0, n);
 
-    if (n == 0 || buffer.getNumChannels() == 0)
+    if (n == 0 || buffer.getNumChannels() == 0 || ! prepared.load (std::memory_order_acquire))
         return;
 
     dsp::TransportInfo transport;
@@ -247,7 +282,9 @@ void AfterglowProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     }
 
     // Mono: run the stereo engine with a scratch right channel and keep the left output.
-    const auto chunk = std::max (1, monoScratch.getNumSamples());
+    const auto chunk = monoScratch.getNumSamples();
+    if (chunk <= 0)
+        return;
     for (int start = 0; start < n; start += chunk)
     {
         const auto len = std::min (chunk, n - start);
@@ -288,17 +325,27 @@ juce::AudioProcessorEditor* AfterglowProcessor::createEditor()
 
 float AfterglowProcessor::getUiScale() const
 {
-    return static_cast<float> (state.state.getProperty (uiScaleProperty, 1.0f));
+    return uiScale.load();
 }
 
 void AfterglowProcessor::setUiScale (float scale)
 {
-    state.state.setProperty (uiScaleProperty, scale, nullptr);
+    uiScale.store (scale);
 }
 
 void AfterglowProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    auto copy = state.copyState();
+    // Built from the parameters' own (thread-safe) values in the same format as the parameter tree, instead of
+    // state.copyState(): that flushes values into the shared tree through the undo manager, which is not safe
+    // when the host saves from a background thread (autosave, project save) while the editor is in use.
+    juce::ValueTree copy (stateType);
+    for (auto* parameter : getParameters())
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameter))
+            copy.appendChild (juce::ValueTree ("PARAM", { { "id", ranged->getParameterID() },
+                                                          { "value", ranged->convertFrom0to1 (ranged->getValue()) } }),
+                              nullptr);
+
+    copy.setProperty (uiScaleProperty, uiScale.load(), nullptr);
     copy.setProperty ("presetName", presetManager->getCurrentPresetName(), nullptr);
     copy.setProperty ("presetDirty", presetManager->isDirty(), nullptr);
     copy.setProperty ("version", AFTERGLOW_VERSION_STRING, nullptr);
@@ -310,16 +357,41 @@ void AfterglowProcessor::getStateInformation (juce::MemoryBlock& destData)
 void AfterglowProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     const auto xml = getXmlFromBinary (data, sizeInBytes);
-    if (xml == nullptr || ! xml->hasTagName (state.state.getType()))
+    if (xml == nullptr || ! xml->hasTagName (stateType))
         return;
 
     auto tree = juce::ValueTree::fromXml (*xml);
-    const auto presetName = tree.getProperty ("presetName").toString();
-    const auto dirty = static_cast<bool> (tree.getProperty ("presetDirty", false));
+    if (tree.hasProperty (uiScaleProperty))
+        uiScale.store (juce::jlimit (0.6f, 2.2f, static_cast<float> (tree.getProperty (uiScaleProperty))));
+    tree.removeProperty (uiScaleProperty, nullptr);
 
-    presetManager->runWhileLoading ([&] { state.replaceState (tree); });
-    presetManager->setCurrentPresetName (presetName, dirty);
-    undoManager.clearUndoHistory();
+    if (juce::MessageManager::existsAndIsCurrentThread())
+    {
+        applyStateOnMessageThread (tree);
+        return;
+    }
+
+    // Some hosts restore sessions from a loading or render thread. The parameter tree, its listeners and the undo
+    // history belong to the message thread, so they are updated there. The parameter values themselves are set
+    // now, through the parameters' own thread-safe interface, so audio (including an offline render that starts
+    // straight away) already uses the restored settings.
+    presetManager->runWhileLoading ([&]
+    {
+        for (const auto& child : tree)
+        {
+            if (! child.hasType ("PARAM"))
+                continue;
+            if (auto* param = state.getParameter (child.getProperty ("id").toString()))
+                param->setValueNotifyingHost (param->convertTo0to1 (static_cast<float> (child.getProperty ("value"))));
+        }
+    });
+    presetManager->setCurrentPresetName (tree.getProperty ("presetName").toString(), static_cast<bool> (tree.getProperty ("presetDirty", false)));
+
+    {
+        const juce::ScopedLock lock (pendingStateLock);
+        pendingState = tree;
+    }
+    triggerAsyncUpdate();
 }
 
 } // namespace afterglow

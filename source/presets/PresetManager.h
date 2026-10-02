@@ -38,8 +38,11 @@ public:
     bool renameUserPreset (int index, const juce::String& newName, juce::String& error);
 
     int getCurrentIndex() const noexcept { return currentIndex; }
-    juce::String getCurrentPresetName() const { return currentName; }
+    /** Thread-safe: hosts may save the session from a background thread while the UI changes presets. */
+    juce::String getCurrentPresetName() const;
     void setCurrentPresetName (const juce::String& name, bool dirtyFlag);
+    /** Finds the current preset's position in the list (message thread only). */
+    void resolveCurrentIndex();
     bool isDirty() const noexcept { return dirty.load(); }
 
     void setStartupPreset (int index);
@@ -76,7 +79,9 @@ private:
     juce::UndoManager* undo = nullptr;
     std::vector<Preset> presets;
     int currentIndex = -1;
+    void storeCurrentName (const juce::String& name);
     juce::String currentName { "Init" };
+    mutable juce::SpinLock nameLock;
     juce::String startupName;
     std::atomic<bool> dirty { false };
     std::atomic<int> loadingDepth { 0 };

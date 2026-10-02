@@ -132,33 +132,20 @@ namespace
         });
     }
 
-    struct Key
-    {
-        Kind kind;
-        int w, h;
-        uint32_t seed;
-        bool operator< (const Key& o) const
-        {
-            return std::tie (kind, w, h, seed) < std::tie (o.kind, o.w, o.h, o.seed);
-        }
-    };
-
-    std::map<Key, juce::Image>& cache()
-    {
-        static std::map<Key, juce::Image> c;
-        return c;
-    }
 } // namespace
 
 juce::Image get (Kind kind, int pixelWidth, int pixelHeight, uint32_t seed)
 {
     pixelWidth = std::clamp (pixelWidth, 1, 8192);
     pixelHeight = std::clamp (pixelHeight, 1, 8192);
-    const Key key { kind, pixelWidth, pixelHeight, seed };
-    auto& c = cache();
+    // Cached in the editors' shared resources (never in a static, see UiResources).
+    auto* resources = UiResources::current();
+    const auto key = "texture/" + juce::String (static_cast<int> (kind)) + "/" + juce::String (pixelWidth) + "x" + juce::String (pixelHeight)
+                   + "/" + juce::String (static_cast<juce::int64> (seed));
 
-    if (auto it = c.find (key); it != c.end())
-        return it->second;
+    if (resources != nullptr)
+        if (auto cached = resources->findImage (key); cached.isValid())
+            return cached;
 
     juce::Image image;
     switch (kind)
@@ -171,11 +158,8 @@ juce::Image get (Kind kind, int pixelWidth, int pixelHeight, uint32_t seed)
         case Kind::darkGrainTile: image = makeGrainTile (pixelWidth, seed, true, false); break;
     }
 
-    // Keep the cache bounded: textures are regenerated when the window is resized anyway.
-    if (c.size() > 48)
-        c.clear();
-
-    c[key] = image;
+    if (resources != nullptr)
+        resources->storeImage (key, image);
     return image;
 }
 
@@ -203,6 +187,5 @@ void drawFitted (juce::Graphics& g, const juce::Image& image, juce::Rectangle<fl
     g.setOpacity (1.0f);
 }
 
-void clearCache() { cache().clear(); }
 
 } // namespace afterglow::ui::Textures

@@ -3,14 +3,59 @@
 
 namespace afterglow::ui
 {
-Fonts& Fonts::get()
+namespace
 {
-    static Fonts instance;
-    return instance;
+    UiResources* liveResources = nullptr; // set only on the message thread, by UiResources itself
+} // namespace
+
+UiResources::UiResources()
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    jassert (liveResources == nullptr);
+    liveResources = this;
 }
 
-Fonts::Fonts()
+UiResources::~UiResources()
 {
+    JUCE_ASSERT_MESSAGE_THREAD
+    if (liveResources == this)
+        liveResources = nullptr;
+}
+
+UiResources* UiResources::current() noexcept { return liveResources; }
+
+juce::Image UiResources::findImage (const juce::String& key) const
+{
+    if (const auto it = images.find (key); it != images.end())
+        return it->second;
+    return {};
+}
+
+void UiResources::storeImage (const juce::String& key, const juce::Image& image)
+{
+    // Keep the cache bounded: artwork is regenerated for a new size when the window is resized anyway.
+    if (images.size() >= 96)
+        images.clear();
+    images[key] = image;
+}
+
+//======================================================================================================================
+const Fonts& Fonts::get()
+{
+    if (auto* resources = UiResources::current())
+        return resources->getFonts();
+
+    // No editor open (for example a host asking for a font before the editor exists): plain fonts, which hold no
+    // platform resources, so this static is harmless at unload.
+    static const Fonts fallback { false };
+    return fallback;
+}
+
+Fonts::Fonts (bool loadEmbedded)
+{
+    if (! loadEmbedded)
+        return;
+
     using namespace AfterglowBinaryData;
     medium = juce::Typeface::createSystemTypefaceFor (BarlowCondensedMedium_ttf, static_cast<size_t> (BarlowCondensedMedium_ttfSize));
     semiBold = juce::Typeface::createSystemTypefaceFor (BarlowCondensedSemiBold_ttf, static_cast<size_t> (BarlowCondensedSemiBold_ttfSize));
