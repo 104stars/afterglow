@@ -78,8 +78,10 @@ Every module is exactly transparent when its big knob is at 0 % (verified by nul
 ### Noise
 * Impulsive types (Vinyl, Shellac, Radio) use a crackle generator: Poisson-distributed events with power-law sizes
   (many tiny ticks, few large ones), decaying noise bursts, separate rarer "pops" with a low thump, and band-limiting
-  per type. Vinyl adds surface noise that swishes at the platter rotation rate (0.556 Hz at 33 1/3 rpm, 1.3 Hz for 78 rpm)
-  and turntable rumble.
+  per type. Vinyl and Shellac add turntable rumble and a steady surface noise whose level only drifts, slowly and
+  irregularly (about 1 dB at most). Nothing follows the platter speed: a level swing at the rotation rate is heard as a
+  tremolo, so the rotation is left to the pitch (Wobble's wow rate, 0.556 Hz for 33 1/3 rpm and 1.3 Hz for 78 rpm in
+  the record presets).
 * Tape and Cassette shape Gaussian noise with filters matching their hiss spectra; the hiss breathes slightly
   (modulation noise). VHS adds the 15.734 kHz line whine, 59.94 Hz head-switching ticks and occasional tracking swells.
 * Hum 50/60 use a harmonic series computed with a Chebyshev recurrence; Buzz models an SCR dimmer style buzz.
@@ -150,13 +152,14 @@ The test runner is built with the plugin and runs in CI on Windows, macOS and Li
 | Host bypass | delayed by exactly the reported latency |
 | Preset state | modified flag, defaults for unlisted parameters, Quality never changed by presets |
 | Noise calibration | every type within 0.1 dB of its target level |
+| Noise steadiness (level of the hiss band over 40 s) | no type pulses at a fixed rate: the strongest component of the level's modulation spectrum (0.4 to 4.5 Hz) stands at most 13 dB above its surroundings, which is random motion rather than a line; Vinyl and Shellac used to show lines 40 dB above their surroundings and 4 to 6.5 dB deep at the platter speed |
 | Distort level matching (sine at -12 dBFS) | within about +/-2.5 dB from 25 % to 100 % drive |
 | Space level across decay settings | within about +/-2 dB (Resonator within 4 dB) |
 | Wobble depth | measured pitch swing within 6 % of the design value |
 | Aliasing (5 kHz sine, Clip at 80 %) | 1x: -12 dB, 2x: -25 dB, 4x: -30 dB relative to the harmonics |
 
-CI also validates the VST3 with [pluginval](https://github.com/Tracktion/pluginval) at strictness level 8 on Windows, macOS
-and Linux (including the editor tests on Windows and macOS); it also passes at strictness level 10 locally.
+CI also validates the VST3 with [pluginval](https://github.com/Tracktion/pluginval) at strictness level 10 on Windows,
+macOS and Linux (including the editor tests on Windows and macOS).
 
 ## 5. Sources
 

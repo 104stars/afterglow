@@ -329,21 +329,18 @@ void NoiseSynth::render (int type, float* left, float* right, int n, float activ
 void NoiseSynth::renderVinyl (float* l, float* r, int n, float activity, bool shellacMode) noexcept
 {
     auto& crackle = shellacMode ? shellacCrackle : vinylCrackle;
-    const auto rpmHz = shellacMode ? 1.3f : 0.5556f;
     const auto surfaceLevel = shellacMode ? 0.09f : 0.012f;
-    const auto swishDepth = shellacMode ? 0.5f : 0.35f;
     const auto rumbleLevel = shellacMode ? 0.6f : 0.4f;
     const auto density = std::max (0.15f, 1.0f + 1.6f * activity);
 
+    // The surface noise of a disc is steady: its level only drifts, slowly and irregularly, with the state of the
+    // groove (at most about 1 dB here). Nothing follows the platter speed: a level swing locked to the rotation is
+    // heard as a tremolo. The rotation belongs to the pitch (Wobble's wow rate).
+    const auto driftDepth = shellacMode ? 0.16f : 0.1f;
+
     for (int i = 0; i < n; ++i)
     {
-        phaseA += rpmHz * invFs;
-        if (phaseA >= 1.0)
-            phaseA -= 1.0;
-
-        const auto rot = static_cast<float> (phaseA) * twoPi;
-        const auto swish = 1.0f + swishDepth * (0.7f * std::sin (rot) + 0.3f * std::sin (2.0f * rot + 0.7f));
-
+        const auto drift = 1.0f + driftDepth * wander[1].next();
         float out[2];
         crackle.process (out[0], out[1], density);
 
@@ -356,7 +353,7 @@ void NoiseSynth::renderVinyl (float* l, float* r, int n, float activity, bool sh
                 surface = bandC[c].process (surface);
 
             const auto rumble = lowB[c].processLP (lowA[c].processLP (rumbleSource)) * rumbleLevel * 6.0f;
-            out[c] += surface * surfaceLevel * swish + rumble;
+            out[c] += surface * surfaceLevel * drift + rumble;
         }
 
         l[i] = out[0];

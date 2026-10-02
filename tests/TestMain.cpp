@@ -6,7 +6,9 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
+#include <algorithm>
 #include <chrono>
+#include <complex>
 #include <cstdio>
 #include <random>
 
@@ -388,6 +390,114 @@ void testNoiseCalibration()
     }
 }
 
+/** Level of the band the ear follows in a noise bed (high-passed at 400 Hz, which leaves out the sub-bass rumble), in
+    dB per 100 ms window. The median of |x| is used so that sparse crackle events do not dominate. */
+std::vector<double> hissLevelDb (const juce::AudioBuffer<float>& b, double sampleRate, int startSample)
+{
+    juce::dsp::IIR::Filter<float> highPass (juce::dsp::IIR::Coefficients<float>::makeHighPass (sampleRate, 400.0));
+    const auto window = static_cast<int> (sampleRate * 0.1);
+    std::vector<float> rectified (static_cast<size_t> (window));
+    std::vector<double> levels;
+
+    for (int start = startSample; start + window <= b.getNumSamples(); start += window)
+    {
+        for (int i = 0; i < window; ++i)
+            rectified[static_cast<size_t> (i)] = std::abs (highPass.processSample (b.getSample (0, start + i)));
+
+        const auto middle = rectified.begin() + window / 2;
+        std::nth_element (rectified.begin(), middle, rectified.end());
+        levels.push_back (toDb (*middle));
+    }
+
+    return levels;
+}
+
+struct ModulationLine
+{
+    double hz = 0.0, depthDb = 0.0, prominenceDb = 0.0;
+};
+
+/** Finds the strongest sinusoidal component of a level curve (in dB, sampled at levelRate) between loHz and hiHz:
+    its peak-to-peak depth, and how far it stands above the modulation spectrum around it. */
+ModulationLine strongestModulation (const std::vector<double>& levels, double levelRate, double loHz, double hiHz)
+{
+    const auto pi = juce::MathConstants<double>::pi;
+    const auto m = levels.size();
+    auto mean = 0.0;
+    for (auto v : levels)
+        mean += v;
+    mean /= static_cast<double> (m);
+
+    const auto resolution = levelRate / static_cast<double> (m);
+    std::vector<double> freqs, power;
+
+    // Finely sampled (zero-padded) so that a line between two bins is measured at its full height.
+    for (auto hz = std::max (0.05, loHz - 0.5); hz <= hiHz + 0.5; hz += 0.25 * resolution)
+    {
+        std::complex<double> sum;
+        for (size_t k = 0; k < m; ++k)
+        {
+            const auto hann = 0.5 - 0.5 * std::cos (2.0 * pi * static_cast<double> (k) / static_cast<double> (m - 1));
+            sum += (levels[k] - mean) * hann * std::polar (1.0, -2.0 * pi * hz * static_cast<double> (k) / levelRate);
+        }
+        freqs.push_back (hz);
+        power.push_back (std::norm (sum));
+    }
+
+    const auto first = std::lower_bound (freqs.begin(), freqs.end(), loHz) - freqs.begin();
+    const auto last = std::upper_bound (freqs.begin(), freqs.end(), hiHz) - freqs.begin();
+    const auto peak = static_cast<size_t> (std::max_element (power.begin() + first, power.begin() + last) - power.begin());
+
+    // Surroundings: within 0.5 Hz of the peak, outside its main lobe.
+    std::vector<double> around;
+    for (size_t i = 0; i < freqs.size(); ++i)
+    {
+        const auto distance = std::abs (freqs[i] - freqs[peak]);
+        if (distance <= 0.5 && distance > 3.0 * resolution)
+            around.push_back (power[i]);
+    }
+    const auto middle = around.begin() + static_cast<std::ptrdiff_t> (around.size() / 2);
+    std::nth_element (around.begin(), middle, around.end());
+
+    ModulationLine line;
+    line.hz = freqs[peak];
+    // Peak to peak: under a Hann window, a sinusoid of amplitude a gives |X| = a * m / 4.
+    line.depthDb = 2.0 * 4.0 * std::sqrt (power[peak]) / static_cast<double> (m);
+    line.prominenceDb = 10.0 * std::log10 (power[peak] / std::max (*middle, 1.0e-30));
+    return line;
+}
+
+void testNoiseSteadiness()
+{
+    section ("Noise steadiness (no level pulsing at a fixed rate, 40 s per type)");
+    // A level swing at a fixed rate is heard as a tremolo (Vinyl and Shellac used to pulse at the platter speed). Any
+    // slow motion in a noise bed must be irregular, so the modulation spectrum of its level must not show a clear line.
+    const auto names = noiseTypeNames();
+    constexpr double sampleRate = 48000.0;
+
+    for (int t = 0; t < names.size(); ++t)
+    {
+        auto proc = makeProcessor (sampleRate, 512);
+        setAllModules (*proc, false);
+        setParam (*proc, ParamIDs::noiseOn, 1.0f);
+        setParam (*proc, ParamIDs::noiseType, static_cast<float> (t));
+        setParam (*proc, ParamIDs::noiseAmount, 100.0f);
+        setParam (*proc, ParamIDs::noiseFollow, 0.0f);
+        setParam (*proc, ParamIDs::noiseDuck, 0.0f);
+        setParam (*proc, ParamIDs::noiseFlux, 0.0f);
+        proc->prepareToPlay (sampleRate, 512);
+        juce::AudioBuffer<float> b (2, static_cast<int> (sampleRate * 41.0));
+        b.clear();
+        runProcessor (*proc, b, 512, false);
+
+        const auto levels = hissLevelDb (b, sampleRate, static_cast<int> (sampleRate));
+        const auto line = strongestModulation (levels, 10.0, 0.4, 4.5);
+        std::printf ("  %-13s strongest component %4.2f Hz: %4.2f dB deep, %4.1f dB above its surroundings\n",
+                     names[t].toRawUTF8(), line.hz, line.depthDb, line.prominenceDb);
+        check (line.prominenceDb < 20.0 || line.depthDb < 0.5, "noise level does not pulse at a fixed rate: " + names[t]);
+    }
+}
+
 void testDistortLevels()
 {
     section ("Distort level matching (1 kHz sine at -12 dBFS)");
@@ -626,6 +736,7 @@ int main()
     testPresets();
     testStateRoundTrip();
     testNoiseCalibration();
+    testNoiseSteadiness();
     testDistortLevels();
     testSpaceLevels();
     testWobblePitch();
