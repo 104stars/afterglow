@@ -384,11 +384,13 @@ void AfterglowLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, in
 
         if (! isFlux && ! vertical)
         {
-            // Centre detent ticks above and below the slot (balance sliders).
-            g.setColour (slider.findColour (juce::Slider::rotarySliderOutlineColourId).withAlpha (0.75f));
+            // Centre index for balance sliders: a small printed triangle above the slot.
             const auto cx = area.getCentreX();
-            g.fillRect (juce::Rectangle<float> (cx - 0.6f, area.getY(), 1.2f, slot.getY() - area.getY() - 2.0f));
-            g.fillRect (juce::Rectangle<float> (cx - 0.6f, slot.getBottom() + 2.0f, 1.2f, area.getBottom() - slot.getBottom() - 2.0f));
+            const auto tipY = slot.getY() - 2.0f;
+            juce::Path notch;
+            notch.addTriangle (cx - 3.0f, tipY - 4.0f, cx + 3.0f, tipY - 4.0f, cx, tipY);
+            g.setColour (slider.findColour (juce::Slider::rotarySliderOutlineColourId).withAlpha (0.8f));
+            g.fillPath (notch);
         }
 
         const auto capW = isFlux ? 11.0f : 13.0f;
@@ -479,15 +481,29 @@ void AfterglowLookAndFeel::getIdealPopupMenuItemSize (const juce::String& text, 
 }
 
 //======================================================================================================================
+namespace
+{
+    // Tooltips are measured and drawn from the same layout (same font, same wrap width), so the box always fits
+    // the text exactly; wrapping again at the rounded box width could add a line that then gets clipped.
+    constexpr float tooltipWrapWidth = 260.0f;
+    constexpr int tooltipPadX = 10, tooltipPadY = 7;
+
+    juce::TextLayout makeTooltipLayout (const juce::String& text)
+    {
+        juce::AttributedString s;
+        s.append (text, Fonts::get().labelMedium (15.0f), Colours::ink);
+        s.setWordWrap (juce::AttributedString::WordWrap::byWord);
+        juce::TextLayout layout;
+        layout.createLayout (s, tooltipWrapWidth);
+        return layout;
+    }
+} // namespace
+
 juce::Rectangle<int> AfterglowLookAndFeel::getTooltipBounds (const juce::String& tipText, juce::Point<int> screenPos, juce::Rectangle<int> parentArea)
 {
-    const auto font = Fonts::get().labelMedium (15.0f);
-    juce::AttributedString s;
-    s.append (tipText, font, Colours::ink);
-    juce::TextLayout layout;
-    layout.createLayout (s, 260.0f);
-    const auto w = juce::roundToInt (layout.getWidth()) + 20;
-    const auto h = juce::roundToInt (layout.getHeight()) + 14;
+    const auto layout = makeTooltipLayout (tipText);
+    const auto w = static_cast<int> (std::ceil (layout.getWidth())) + 2 * tooltipPadX + 1;
+    const auto h = static_cast<int> (std::ceil (layout.getHeight())) + 2 * tooltipPadY + 1;
     return juce::Rectangle<int> (screenPos.x > parentArea.getCentreX() ? screenPos.x - (w + 12) : screenPos.x + 24,
                                  screenPos.y > parentArea.getCentreY() ? screenPos.y - (h + 6) : screenPos.y + 6, w, h)
         .constrainedWithin (parentArea);
@@ -501,11 +517,9 @@ void AfterglowLookAndFeel::drawTooltip (juce::Graphics& g, const juce::String& t
     g.setColour (Colours::ink.withAlpha (0.5f));
     g.drawRoundedRectangle (area.reduced (0.5f), 4.0f, 1.0f);
 
-    juce::AttributedString s;
-    s.append (text, Fonts::get().labelMedium (15.0f), Colours::ink);
-    juce::TextLayout layout;
-    layout.createLayout (s, static_cast<float> (width) - 20.0f);
-    layout.draw (g, area.reduced (10.0f, 7.0f));
+    const auto layout = makeTooltipLayout (text);
+    layout.draw (g, juce::Rectangle<float> (static_cast<float> (tooltipPadX), static_cast<float> (tooltipPadY),
+                                            tooltipWrapWidth, layout.getHeight()));
 }
 
 void AfterglowLookAndFeel::fillTextEditorBackground (juce::Graphics& g, int width, int height, juce::TextEditor&)
@@ -573,7 +587,26 @@ void AfterglowLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button
 
 juce::Font AfterglowLookAndFeel::getTextButtonFont (juce::TextButton&, int buttonHeight)
 {
-    return Fonts::get().label (std::min (17.0f, static_cast<float> (buttonHeight) * 0.62f));
+    // Same legend size as the keycaps; larger only for the big OK / CANCEL keys.
+    return Fonts::get().label (buttonHeight >= 30 ? 15.0f : 13.0f);
+}
+
+void AfterglowLookAndFeel::drawCornerResizer (juce::Graphics& g, int w, int h, bool isMouseOver, bool isMouseDragging)
+{
+    // Three short grooves machined into the corner instead of the stock grey grip.
+    const auto size = static_cast<float> (std::min (w, h));
+    const auto right = static_cast<float> (w) - 3.0f;
+    const auto bottom = static_cast<float> (h) - 3.0f;
+    const auto strength = isMouseDragging ? 1.0f : (isMouseOver ? 0.85f : 0.6f);
+
+    for (int i = 0; i < 3; ++i)
+    {
+        const auto d = size * (0.3f + 0.22f * static_cast<float> (i));
+        g.setColour (juce::Colours::black.withAlpha (0.55f * strength));
+        g.drawLine (right - d, bottom, right, bottom - d, 1.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.14f * strength));
+        g.drawLine (right - d + 1.0f, bottom + 1.0f, right + 1.0f, bottom - d + 1.0f, 1.0f);
+    }
 }
 
 void AfterglowLookAndFeel::drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, int y, int width, int height, bool isScrollbarVertical,

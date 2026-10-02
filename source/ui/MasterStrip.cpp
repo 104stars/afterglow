@@ -20,6 +20,8 @@ MasterStrip::MasterStrip (APVTS& s, dsp::EngineTelemetry& t)
            "Cut filters: drag the left handle for the low cut and the right handle for the high cut. The far ends mean off.")
 {
     cut.setOffAtExtremes (true);
+    toneMode.setButtonText ("MID");
+    toneMode.setOffText ("TILT");
 
     for (auto* c : std::initializer_list<juce::Component*> { &inMeter, &outMeter, &inGain, &tone, &width, &outGain, &mix,
                                                              &eqOn, &lowHard, &highHard, &toneMode, &limiter, &cut })
@@ -31,27 +33,33 @@ MasterStrip::MasterStrip (APVTS& s, dsp::EngineTelemetry& t)
 
 void MasterStrip::resized()
 {
+    // Everything in the strip is centred on one line (y = 62): knob dials, meters, cut slider and keycaps.
+    constexpr int centreY = 62;
+    constexpr int knobTop = centreY - 28;                 // dial centre of a 70 px knob box
+    const auto keycap = [] (int x, int w) { return juce::Rectangle<int> (x, centreY - 11, w, 22); };
+
     inSection = { 8, 0, 190, getHeight() };
     eqSection = { 204, 0, 520, getHeight() };
     outSection = { 730, 0, 250, getHeight() };
-    globalSection = { 986, 0, 76, getHeight() };
+    globalSection = { 986, 0, 74, getHeight() };
 
-    inMeter.setBounds (16, 34, 112, 66);
-    inGain.setBounds (132, 30, 60, 70);
+    inMeter.setBounds (16, centreY - 32, 112, 64);
+    inGain.setBounds (132, knobTop, 60, 70);
 
-    eqOn.setBounds (214, 46, 30, 34);
-    lowHard.setBounds (254, 52, 44, 22);
-    cut.setBounds (304, 40, 262, 34);
-    highHard.setBounds (572, 52, 44, 22);
-    tone.setBounds (622, 30, 60, 70);
-    toneMode.setBounds (684, 54, 38, 22);
+    eqOn.setBounds (214, centreY - 17, 30, 34);
+    lowHard.setBounds (keycap (254, 44));
+    // 10 px inner padding on both sides of the EQ section; TONE sits midway between HIGH CUT and MODE.
+    cut.setBounds (304, centreY - 17, 254, 34);
+    highHard.setBounds (keycap (564, 44));
+    tone.setBounds (611, knobTop, 60, 70);
+    toneMode.setBounds (keycap (eqSection.getRight() - 10 - 40, 40));
 
-    width.setBounds (736, 30, 60, 70);
-    outGain.setBounds (798, 30, 60, 70);
-    outMeter.setBounds (864, 34, 112, 66);
+    width.setBounds (736, knobTop, 60, 70);
+    outGain.setBounds (798, knobTop, 60, 70);
+    outMeter.setBounds (864, centreY - 32, 112, 64);
 
-    mix.setBounds (994, 22, 60, 70);
-    limiter.setBounds (996, 100, 56, 22);
+    mix.setBounds (globalSection.getCentreX() - 30, knobTop, 60, 70);
+    limiter.setBounds (globalSection.getCentreX() - 28, knobTop + 72, 56, Layout::keycapHeight - 2); // 10 px above the strip edge
 }
 
 void MasterStrip::refresh (double seconds)
@@ -104,28 +112,31 @@ void MasterStrip::paint (juce::Graphics& g)
         g.drawVerticalLine (x + 1, 10.0f, area.getBottom() - 10.0f);
     }
 
-    // Small captions.
-    const auto small = Fonts::get().label (11.0f);
-    drawEngravedText (g, "ON", eqOn.getBounds().toFloat().withY (static_cast<float> (eqOn.getBottom()) + 2.0f).withHeight (12.0f), small, Colours::silkscreen.withAlpha (0.8f), juce::Justification::centredTop, true);
-    drawEngravedText (g, "LOW", lowHard.getBounds().toFloat().withY (static_cast<float> (lowHard.getY()) - 14.0f).withHeight (12.0f), small, Colours::silkscreen.withAlpha (0.8f), juce::Justification::centred, true);
-    drawEngravedText (g, "HIGH", highHard.getBounds().toFloat().withY (static_cast<float> (highHard.getY()) - 14.0f).withHeight (12.0f), small, Colours::silkscreen.withAlpha (0.8f), juce::Justification::centred, true);
-    drawEngravedText (g, "CUT", cut.getBounds().toFloat().withY (static_cast<float> (cut.getY()) - 14.0f).withHeight (12.0f), small, Colours::silkscreen.withAlpha (0.8f), juce::Justification::centred, true);
+    // Captions: one baseline above the keycaps (keycap top - 13), micro size, same print colour.
+    const auto micro = Fonts::get().labelMedium (10.5f);
+    const auto print = Colours::silkscreen.withAlpha (0.75f);
+    auto captionAbove = [&] (juce::Component& c, const juce::String& text, int captionWidth)
+    {
+        const auto b = c.getBounds();
+        drawEngravedText (g, text, juce::Rectangle<float> (static_cast<float> (b.getCentreX() - captionWidth / 2), static_cast<float> (b.getY() - 13), static_cast<float> (captionWidth), 12.0f),
+                          micro, print, juce::Justification::centred, true);
+    };
+    captionAbove (lowHard, "LOW CUT", 60);
+    captionAbove (highHard, "HIGH CUT", 60);
+    captionAbove (toneMode, "MODE", 50);
+    drawEngravedText (g, "ON", eqOn.getBounds().toFloat().withY (static_cast<float> (eqOn.getBottom()) + 2.0f).withHeight (12.0f), micro, print, juce::Justification::centredTop, true);
 
     // Frequency scale under the cut slider (shared 10 Hz - 22 kHz log axis).
     const auto track = cut.getBounds().toFloat().reduced (8.0f, 0.0f);
     const auto axisPos = [&] (float hz) { return track.getX() + track.getWidth() * std::log (hz / 10.0f) / std::log (2200.0f); };
-    g.setFont (Fonts::get().label (10.5f));
     for (auto [hz, text] : { std::pair { 20.0f, "20" }, std::pair { 100.0f, "100" }, std::pair { 1000.0f, "1k" }, std::pair { 10000.0f, "10k" } })
     {
         const auto x = axisPos (hz);
         g.setColour (Colours::silkscreen.withAlpha (0.4f));
         g.drawVerticalLine (juce::roundToInt (x), track.getBottom() + 1.0f, track.getBottom() + 5.0f);
-        g.setColour (Colours::silkscreen.withAlpha (0.65f));
-        g.drawText (text, juce::Rectangle<float> (30.0f, 12.0f).withCentre ({ x, track.getBottom() + 12.0f }), juce::Justification::centred, false);
+        drawEngravedText (g, text, juce::Rectangle<float> (30.0f, 12.0f).withCentre ({ x, track.getBottom() + 12.0f }), micro, Colours::silkscreen.withAlpha (0.65f), juce::Justification::centred, true);
     }
 
-    // Tone mode caption.
-    drawEngravedText (g, "TILT", toneMode.getBounds().toFloat().withY (static_cast<float> (toneMode.getY()) - 14.0f).withHeight (12.0f), small, Colours::silkscreen.withAlpha (0.8f), juce::Justification::centred, true);
 }
 
 } // namespace afterglow::ui

@@ -16,6 +16,14 @@ void AfterglowEngine::prepare (double sampleRate, int maxBlockSize, int oversamp
     magnetic.prepare (sampleRate, maxBlock);
     master.prepare (sampleRate, maxBlock);
 
+    // These modules write display histories while they process.
+    wobble.setTelemetry (&telemetry);
+    distort.setTelemetry (&telemetry);
+    space.setTelemetry (&telemetry);
+    magnetic.setTelemetry (&telemetry);
+    noiseWindow = std::max (1, static_cast<int> (std::lround (sampleRate * 0.025)));
+    telemetry.sampleRate.store (static_cast<float> (sampleRate), std::memory_order_relaxed);
+
     for (auto& d : dryDelay)
         d.allocate (maxBlock + 1024);
 
@@ -39,6 +47,7 @@ void AfterglowEngine::reset()
         d.clear();
 
     mixPrimed = false;
+    noiseCount = 0;
 }
 
 int AfterglowEngine::setOversamplingOrder (int order) noexcept
@@ -138,26 +147,29 @@ void AfterglowEngine::processChunk (float* left, float* right, int n, const Engi
     master.processLimiter (left, right, n);
 
     publishMeters (left, right, n, false);
-    noise.publish (telemetry);
-    wobble.publish (telemetry);
     distort.publish (telemetry);
     digital.publish (telemetry);
     space.publish (telemetry);
-    magnetic.publish (telemetry);
 
-    // Feed the noise oscilloscope (decimated).
-    const auto* rendered = noise.getRenderedLeft();
-    auto write = telemetry.noiseScopeWrite.load (std::memory_order_relaxed);
+    // Noise display: the statistics of the rendered noise (mid) over 25 ms windows.
+    const auto* noiseL = noise.getRenderedLeft();
+    const auto* noiseR = noise.getRenderedRight();
     for (int i = 0; i < n; ++i)
     {
-        if (++scopeDecimator >= 6)
+        const auto v = 0.5f * (noiseL[i] + noiseR[i]);
+        noiseMin = noiseCount == 0 ? v : std::min (noiseMin, v);
+        noiseMax = noiseCount == 0 ? v : std::max (noiseMax, v);
+        noiseSum += v;
+        noiseSumSq += v * v;
+
+        if (++noiseCount >= noiseWindow)
         {
-            scopeDecimator = 0;
-            telemetry.noiseScope[static_cast<size_t> (write)].store (rendered[i], std::memory_order_relaxed);
-            write = (write + 1) % EngineTelemetry::scopeSize;
+            const auto count = static_cast<float> (noiseCount);
+            telemetry.noiseEnvelope.push ({ noiseMin, noiseMax, noiseSum / count, std::sqrt (noiseSumSq / count) });
+            noiseCount = 0;
+            noiseSum = noiseSumSq = 0.0f;
         }
     }
-    telemetry.noiseScopeWrite.store (write, std::memory_order_relaxed);
 }
 
 void AfterglowEngine::publishMeters (const float* left, const float* right, int n, bool input) noexcept

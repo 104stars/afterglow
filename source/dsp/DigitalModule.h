@@ -30,7 +30,7 @@ private:
     FluxSource rateFlux, bitsFlux, jitterFlux;
     Smoother amountSm, balanceSm, smoothSm, lowSm, highSm, cutSm, mixSm, compandSm;
     bool primed = false;
-    float currentRate = 44100.0f, currentBits = 24.0f;
+    float currentRate = 44100.0f, currentBits = 24.0f, currentJitter = 0.0f;
     float prevEngage = 0.0f;
 };
 

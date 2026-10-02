@@ -1,5 +1,7 @@
 #include "MagneticModule.h"
 
+#include <complex>
+
 namespace afterglow::dsp
 {
 void MagneticModule::prepare (double sampleRate, int)
@@ -26,6 +28,7 @@ void MagneticModule::prepare (double sampleRate, int)
     rateSm.prepare (sampleRate, 0.2f);
     dropoutSm.prepare (sampleRate, 0.05f);
     stereoSm.prepare (sampleRate, 0.08f);
+    tapeWindow = std::max (1, static_cast<int> (std::lround (sampleRate / 64.0)));
 
     reset();
 }
@@ -42,8 +45,35 @@ void MagneticModule::reset()
 
     flutterPhase = 0.0;
     primed = false;
-    displayGain = 1.0f;
-    displayDropout = 0.0f;
+    tapeSamples = 0;
+}
+
+float MagneticModule::responseDb (float gainDb, float loss, float hz) noexcept
+{
+    // The treble loss blends a 2-pole low-pass (Q 0.6) into the signal: y = (1 - b) x + b lp(x).
+    const auto cutoff = logLerp (20000.0f, 2200.0f, clamp01 (loss));
+    const auto blend = clamp01 (4.0f * loss);
+    const auto r = hz / cutoff;
+    const std::complex<float> lowPass = 1.0f / std::complex<float> (1.0f - r * r, r / 0.6f);
+    const auto h = (1.0f - blend) + blend * lowPass;
+    return gainDb + 20.0f * std::log10 (std::max (1.0e-6f, std::abs (h)));
+}
+
+void MagneticModule::collectTape (const float* gainsDb, const float* losses, int len) noexcept
+{
+    for (int c = 0; c < 2; ++c)
+    {
+        tapeGainDb[c] = tapeSamples == 0 ? gainsDb[c] : std::min (tapeGainDb[c], gainsDb[c]);
+        tapeLoss[c] = tapeSamples == 0 ? losses[c] : std::max (tapeLoss[c], losses[c]);
+    }
+
+    tapeSamples += len;
+    if (tapeSamples >= tapeWindow)
+    {
+        if (telemetry != nullptr)
+            telemetry->magneticTape.push ({ tapeGainDb[0], tapeLoss[0], tapeGainDb[1], tapeLoss[1] });
+        tapeSamples = 0;
+    }
 }
 
 void MagneticModule::updateDropout (Dropout& d, float eventsPerSecond, float depthScale, float flux, int len) noexcept
@@ -109,8 +139,11 @@ void MagneticModule::process (float* left, float* right, int n, const MagneticPa
 
     if (amountSm.getCurrent() <= 0.0f && amountTarget <= 0.0f)
     {
-        displayGain = 1.0f;
-        displayDropout = 0.0f;
+        // Untouched tape: keep the display history running at 0 dB and no loss.
+        static constexpr float flat[2] {};
+        for (int done = 0; done < n; done += controlInterval)
+            collectTape (flat, flat, std::min (controlInterval, n - done));
+
         for (auto& ch : channels)
         {
             ch.gain = ch.prevGain = 1.0f;
@@ -121,7 +154,6 @@ void MagneticModule::process (float* left, float* right, int n, const MagneticPa
     }
 
     float* io[2] { left, right };
-    auto dropDisplay = 0.0f;
 
     for (int start = 0; start < n; start += controlInterval)
     {
@@ -174,7 +206,9 @@ void MagneticModule::process (float* left, float* right, int n, const MagneticPa
         // Mono mode: the right channel follows the left one.
         gains[1] = lerp (gains[0], gains[1], stereo);
         losses[1] = lerp (losses[0], losses[1], stereo);
-        dropDisplay = std::max (dropDisplay, channels[0].dropout.env * std::min (1.0f, channels[0].dropout.depthDb / 30.0f));
+
+        const float gainsDb[2] { gainToDb (gains[0]), gainToDb (gains[1]) };
+        collectTape (gainsDb, losses, len);
 
         const auto invLen = 1.0f / static_cast<float> (len);
 
@@ -209,15 +243,6 @@ void MagneticModule::process (float* left, float* right, int n, const MagneticPa
             }
         }
     }
-
-    displayGain = 0.5f * (channels[0].gain + channels[1].gain);
-    displayDropout = dropDisplay;
-}
-
-void MagneticModule::publish (EngineTelemetry& telemetry) const noexcept
-{
-    telemetry.magneticGain.store (displayGain, std::memory_order_relaxed);
-    telemetry.magneticDropout.store (displayDropout, std::memory_order_relaxed);
 }
 
 } // namespace afterglow::dsp

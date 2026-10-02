@@ -47,6 +47,7 @@ void DigitalModule::reset()
     primed = false;
     currentRate = static_cast<float> (fs);
     currentBits = 24.0f;
+    currentJitter = 0.0f;
 }
 
 void DigitalModule::updateFilters (float lowHz, float highHz, float smoothCutoff) noexcept
@@ -122,6 +123,7 @@ void DigitalModule::process (float* left, float* right, int n, const DigitalPara
     {
         currentRate = static_cast<float> (fs);
         currentBits = 24.0f;
+        currentJitter = 0.0f;
         return;
     }
 
@@ -161,6 +163,7 @@ void DigitalModule::process (float* left, float* right, int n, const DigitalPara
 
         const auto increment = targetRate / sr;
         const auto jitter = jitterAmount * rateActive;
+        currentJitter = jitter;
         const auto invLen = 1.0f / static_cast<float> (len);
 
         for (int i = start; i < start + len; ++i)
@@ -209,6 +212,7 @@ void DigitalModule::publish (EngineTelemetry& telemetry) const noexcept
 {
     telemetry.digitalRate.store (currentRate, std::memory_order_relaxed);
     telemetry.digitalBits.store (currentBits, std::memory_order_relaxed);
+    telemetry.digitalJitter.store (currentJitter, std::memory_order_relaxed);
 }
 
 } // namespace afterglow::dsp

@@ -25,8 +25,8 @@ BigKnobRow::BigKnobRow (APVTS& s) : state (s), magnitude (s.getRawParameterValue
         c.amount = s.getRawParameterValue (spec.amount);
         c.knob = std::make_unique<LabelledKnob> (s, spec.amount, juce::String(), StyleId::bigKnob, Colours::ink,
                                                  juce::String (spec.tip) + " At 0 % the module is bypassed.");
-        c.power = std::make_unique<LedButton> (s, spec.on, juce::String(), Colours::ledGreen, LedButton::Look::power,
-                                               juce::String ("Switches the ") + juce::String (spec.title).toLowerCase() + " module on or off.");
+        c.power = std::make_unique<LedButton> (s, spec.on, spec.title, Colours::ledGreen, LedButton::Look::nameplate,
+                                               juce::String ("Click the name to switch the ") + juce::String (spec.title).toLowerCase() + " module on or off.");
 
         // Grabbing the big knob of a switched-off module switches it on, like the hardware it imitates.
         auto* knobSlider = &c.knob->getSlider();
@@ -47,16 +47,24 @@ BigKnobRow::BigKnobRow (APVTS& s) : state (s), magnitude (s.getRawParameterValue
     setOpaque (true);
 }
 
+juce::Rectangle<int> BigKnobRow::cellBounds (size_t index) const
+{
+    // Cells follow the module columns above (Layout::columnCentre), so each knob sits under its module.
+    const auto centre = Layout::columnCentre (static_cast<int> (index));
+    return { centre - Layout::modulePitch / 2, 0, Layout::modulePitch, getHeight() };
+}
+
 void BigKnobRow::resized()
 {
-    const auto cellWidth = static_cast<float> (getWidth() - 20) / 6.0f;
-
     for (size_t i = 0; i < cells.size(); ++i)
     {
-        const auto x = 10.0f + cellWidth * static_cast<float> (i);
-        const auto cell = juce::Rectangle<float> (x, 0.0f, cellWidth, static_cast<float> (getHeight())).toNearestInt();
-        cells[i].knob->setBounds (juce::Rectangle<int> (118, 118).withCentre ({ cell.getCentreX(), cell.getY() + 66 }));
-        cells[i].power->setBounds (cell.getX() + 10, cell.getY() + 12, 30, 34);
+        const auto cell = cellBounds (i);
+        cells[i].knob->setBounds (juce::Rectangle<int> (116, 116).withCentre ({ cell.getCentreX(), 62 }));
+
+        // The module name below the knob is the power switch, clear of the printed scale.
+        const auto plateWidth = cells[i].power->getNameplateWidth();
+        cells[i].power->setBounds (juce::Rectangle<int> (plateWidth, 26).withCentre ({ cell.getCentreX(), getHeight() - 22 }));
+        cells[i].power->toFront (false);
     }
 }
 
@@ -96,22 +104,14 @@ void BigKnobRow::paint (juce::Graphics& g)
     g.setColour (juce::Colours::black.withAlpha (0.45f));
     g.drawHorizontalLine (juce::roundToInt (area.getBottom()) - 1, area.getX(), area.getRight());
 
-    const auto cellWidth = (area.getWidth() - 20.0f) / 6.0f;
-    for (size_t i = 0; i < cells.size(); ++i)
+    for (size_t i = 1; i < cells.size(); ++i)
     {
-        const auto x = 10.0f + cellWidth * static_cast<float> (i);
-
-        // Engraved separators between modules.
-        if (i > 0)
-        {
-            g.setColour (juce::Colours::black.withAlpha (0.18f));
-            g.drawVerticalLine (juce::roundToInt (x), area.getY() + 12.0f, area.getBottom() - 12.0f);
-            g.setColour (juce::Colours::white.withAlpha (0.5f));
-            g.drawVerticalLine (juce::roundToInt (x) + 1, area.getY() + 12.0f, area.getBottom() - 12.0f);
-        }
-
-        const auto label = juce::Rectangle<float> (x, area.getBottom() - 26.0f, cellWidth, 18.0f);
-        drawEngravedText (g, cells[i].title, label, Fonts::get().labelBold (16.0f), Colours::ink.withAlpha (0.85f), juce::Justification::centred, false);
+        // Engraved separators, exactly under the gaps between the modules.
+        const auto x = cellBounds (i).getX();
+        g.setColour (juce::Colours::black.withAlpha (0.18f));
+        g.drawVerticalLine (x, area.getY() + 12.0f, area.getBottom() - 12.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.5f));
+        g.drawVerticalLine (x + 1, area.getY() + 12.0f, area.getBottom() - 12.0f);
     }
 }
 

@@ -31,7 +31,7 @@ private:
     std::unique_ptr<APVTS::SliderAttachment> attachment;
     juce::String label;
     juce::Colour ink;
-    float labelHeight = 14.0f;
+    float labelHeight = 13.0f;
 };
 
 //======================================================================================================================
@@ -51,7 +51,7 @@ private:
 class LedButton : public juce::Button
 {
 public:
-    enum class Look { keycap, power, roundLed };
+    enum class Look { keycap, power, roundLed, nameplate };
 
     LedButton (APVTS& state, const juce::String& paramId, const juce::String& text, juce::Colour ledColour, Look look,
                const juce::String& tooltip = {});
@@ -59,7 +59,16 @@ public:
     void paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown) override;
     void setInkColour (juce::Colour c) { ink = c; repaint(); }
 
+    /** Legend shown while the button is off (for two-state keys such as TILT / MID). */
+    void setOffText (const juce::String& legend) { offText = legend; repaint(); }
+
+    /** Width needed by the nameplate look for its lamp and title. */
+    int getNameplateWidth() const;
+
 private:
+    void paintNameplate (juce::Graphics& g, bool isMouseOver, bool isButtonDown);
+
+    juce::String offText;
     std::unique_ptr<APVTS::ButtonAttachment> attachment;
     juce::Colour led, ink { Colours::silkscreen };
     Look look;

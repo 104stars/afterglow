@@ -17,6 +17,8 @@ public:
     void refresh();
 
 private:
+    juce::Rectangle<int> cellBounds (size_t index) const;
+
     struct Cell
     {
         std::unique_ptr<LabelledKnob> knob;

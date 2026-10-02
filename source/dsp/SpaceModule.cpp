@@ -88,6 +88,7 @@ void SpaceModule::prepare (double sampleRate, int)
     highSm.prepare (sampleRate, 0.08f);
     stereoSm.prepare (sampleRate, 0.08f);
     typeFade.prepare (sampleRate, 0.04f);
+    wetWindow = std::max (1, static_cast<int> (std::lround (sampleRate * 0.01)));
 
     currentType = -1;
     reset();
@@ -119,7 +120,40 @@ void SpaceModule::reset()
     typeFade.snapTo (1.0f);
     pendingType = -1;
     primed = false;
-    energy = 0.0f;
+    wetCount = 0;
+    wetSum = 0.0f;
+    onsetFast = onsetSlow = 0.0f;
+    samplesSinceOnset = 1 << 30;
+    std::fill (std::begin (notes), std::end (notes), 0.0f);
+    std::fill (std::begin (noteEnergy), std::end (noteEnergy), 0.0f);
+}
+
+float SpaceModule::decaySeconds (int type, float decay) noexcept
+{
+    const auto& s = spec (type);
+    return s.minRt * std::pow (s.maxRt / s.minRt, std::clamp (decay, 0.0f, 1.0f));
+}
+
+void SpaceModule::buildUpMs (int type, float& minMs, float& maxMs) noexcept
+{
+    const auto& s = spec (type);
+    minMs = s.minDelayMs;
+    maxMs = s.maxDelayMs;
+}
+
+float SpaceModule::decaySecondsAt (int type, float rt, float focusLowHz, float focusHighHz, float hz) noexcept
+{
+    // Each pass through a line of mean length L loses 60 L / rt dB, plus whatever the loop filters take at
+    // this frequency, so the decay rate in dB per second is 60 / rt - filterDb / L.
+    const auto& s = spec (type);
+    const auto dampHz = std::min (focusHighHz, s.dampHz);
+    const auto lowHz = std::max (focusLowHz, s.lowHz);
+    const auto lp = 1.0f / std::sqrt (1.0f + (hz / dampHz) * (hz / dampHz));
+    const auto hp = (hz / lowHz) / std::sqrt (1.0f + (hz / lowHz) * (hz / lowHz));
+    const auto filterDb = 20.0f * std::log10 (std::max (1.0e-6f, lp * hp));
+    const auto lineSeconds = type == resonator ? 0.005f : 0.001f * std::sqrt (s.minDelayMs * s.maxDelayMs);
+    const auto rate = 60.0f / rt - filterDb / lineSeconds;
+    return rate > 1.0e-3f ? 60.0f / rate : 60.0f;
 }
 
 void SpaceModule::configureType (int type)
@@ -231,12 +265,18 @@ void SpaceModule::process (float* left, float* right, int n, const SpaceParams& 
 
     if (amountSm.getCurrent() <= 0.0f && amountTarget <= 0.0f)
     {
-        energy = 0.0f;
+        // Silent, but keep the display's decay time and pre-delay current with the controls.
+        lastRt = decaySeconds (p.type, p.decay);
+        lastPreMs = p.preDelayMs;
         return;
     }
 
     const auto sr = static_cast<float> (fs);
-    auto energySum = 0.0f;
+    const auto onsetFastRelease = std::exp (-static_cast<float> (controlInterval) / (0.04f * sr));
+    const auto onsetSlowAttack = std::exp (-static_cast<float> (controlInterval) / (0.06f * sr));
+    const auto onsetSlowRelease = std::exp (-static_cast<float> (controlInterval) / (0.12f * sr));
+    noteCount = 0;
+    std::fill (std::begin (noteSum), std::end (noteSum), 0.0f);
 
     for (int start = 0; start < n; start += controlInterval)
     {
@@ -256,6 +296,30 @@ void SpaceModule::process (float* left, float* right, int n, const SpaceParams& 
         const auto lowHz = std::exp (lowSm.skip (len));
         const auto highHz = std::exp (highSm.skip (len));
         const auto preMs = std::max (0.0f, preDelaySm.skip (len) + 25.0f * std::abs (predelayFlux.advance (len)));
+        lastRt = rt;
+        lastPreMs = preMs;
+
+        // Display: detect note onsets on the input, so the decay recorder can restart at each hit. The slow
+        // envelope follows a decaying note closely (120 ms release), so a new note stands out against it.
+        if (telemetry != nullptr)
+        {
+            auto peak = 0.0f;
+            for (int i = start; i < start + len; ++i)
+                peak = std::max (peak, std::max (std::abs (left[i]), std::abs (right[i])));
+
+            onsetFast = std::max (peak, onsetFast * onsetFastRelease);
+            const auto isOnset = onsetFast > 2.0f * onsetSlow && onsetFast > 0.003f && samplesSinceOnset > static_cast<int> (0.12f * sr);
+            onsetSlow = onsetFast > onsetSlow ? onsetFast + (onsetSlow - onsetFast) * onsetSlowAttack
+                                              : onsetFast + (onsetSlow - onsetFast) * onsetSlowRelease;
+            samplesSinceOnset = std::min (samplesSinceOnset + len, 1 << 30);
+
+            if (isOnset)
+            {
+                samplesSinceOnset = 0;
+                telemetry->spaceOnsetEntry.store (telemetry->spaceWet.written.load (std::memory_order_relaxed), std::memory_order_relaxed);
+                telemetry->spaceOnsetCount.fetch_add (1, std::memory_order_release);
+            }
+        }
         const auto modDepth = (s.modDepthMs + 1.2f * p.flux * (currentType == resonator ? 0.1f : 1.0f)) * 0.001f * sr;
         const auto fluxMod = 1.0f + 2.0f * std::abs (modFlux.advance (len));
 
@@ -355,6 +419,13 @@ void SpaceModule::process (float* left, float* right, int n, const SpaceParams& 
                 v[l] = o * lineGain[l];
             }
 
+            if (currentType == resonator)
+            {
+                for (int l = 0; l < numLines; ++l)
+                    noteSum[l % 12] += lineOut[l] * lineOut[l] * norm * norm;
+                ++noteCount;
+            }
+
             if (currentType != resonator)
                 hadamard<numLines> (v);
 
@@ -379,18 +450,38 @@ void SpaceModule::process (float* left, float* right, int n, const SpaceParams& 
             outL = lerp (monoOut, outL, stereo);
             outR = lerp (monoOut, outR, stereo);
 
-            energySum += outL * outL + outR * outR;
+            // Display: wet level (before the Amount gain) in 10 ms windows.
+            wetSum += outL * outL + outR * outR;
+            if (++wetCount >= wetWindow)
+            {
+                if (telemetry != nullptr)
+                    telemetry->spaceWet.push ({ 10.0f * std::log10 (wetSum / static_cast<float> (2 * wetCount) + 1.0e-12f) });
+                wetCount = 0;
+                wetSum = 0.0f;
+            }
+
             left[i] = xL * dryGain + outL * wetGain;
             right[i] = xR * dryGain + outR * wetGain;
         }
     }
 
-    energy = std::sqrt (energySum / static_cast<float> (std::max (1, 2 * n))) * amountSm.getCurrent();
+    // Resonator display: energy per pitch class, smoothed over about 40 ms so short host blocks do not flicker.
+    // C to D# each collect two combs (C3 and C4, and so on), so they are halved.
+    const auto smoothing = std::exp (-static_cast<float> (std::max (1, n)) / (0.04f * sr));
+    for (int k = 0; k < 12; ++k)
+    {
+        const auto energy = noteCount > 0 ? noteSum[k] / static_cast<float> (noteCount) / (k < numLines - 12 ? 2.0f : 1.0f) : 0.0f;
+        noteEnergy[k] = energy + (noteEnergy[k] - energy) * smoothing;
+        notes[k] = std::sqrt (noteEnergy[k]);
+    }
 }
 
-void SpaceModule::publish (EngineTelemetry& telemetry) const noexcept
+void SpaceModule::publish (EngineTelemetry& t) const noexcept
 {
-    telemetry.spaceEnergy.store (energy, std::memory_order_relaxed);
+    t.spaceDecaySeconds.store (lastRt, std::memory_order_relaxed);
+    t.spacePreDelayMs.store (lastPreMs, std::memory_order_relaxed);
+    for (size_t k = 0; k < 12; ++k)
+        t.spaceNotes[k].store (notes[k], std::memory_order_relaxed);
 }
 
 } // namespace afterglow::dsp

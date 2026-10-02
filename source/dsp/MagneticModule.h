@@ -14,7 +14,11 @@ public:
     void prepare (double sampleRate, int maxBlockSize);
     void reset();
     void process (float* left, float* right, int n, const MagneticParams& params, const TransportInfo& transport) noexcept;
-    void publish (EngineTelemetry& telemetry) const noexcept;
+    void setTelemetry (EngineTelemetry* t) noexcept { telemetry = t; }
+
+    /** Level change in dB at one frequency for a given gain and treble loss (0..1): the module's own
+        low-pass blend, so the display shows exactly what the audio gets. */
+    static float responseDb (float gainDb, float loss, float hz) noexcept;
 
 private:
     static constexpr int controlInterval = 8;
@@ -46,7 +50,12 @@ private:
     FluxSource rateFlux, depthFlux;
     Smoother amountSm, balanceSm, rateSm, dropoutSm, stereoSm;
     bool primed = false;
-    float displayGain = 1.0f, displayDropout = 0.0f;
+
+    // Display history: lowest gain and highest loss per channel in 1/64 s windows.
+    void collectTape (const float* gainsDb, const float* losses, int len) noexcept;
+    EngineTelemetry* telemetry = nullptr;
+    int tapeWindow = 750, tapeSamples = 0;
+    float tapeGainDb[2] {}, tapeLoss[2] {};
 };
 
 } // namespace afterglow::dsp

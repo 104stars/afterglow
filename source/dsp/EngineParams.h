@@ -1,7 +1,8 @@
 #pragma once
 
-#include <atomic>
 #include <array>
+#include <atomic>
+#include <cstdint>
 
 namespace afterglow::dsp
 {
@@ -120,23 +121,66 @@ struct TransportInfo
     double ppqPosition = 0.0;
 };
 
-/** Lock-free values published by the audio thread for meters and the animated module displays. */
+/** Single-producer, single-consumer history of small records, written by the audio thread and read by the UI.
+    Each record holds Fields floats. The reader takes the newest entries from the write counter and should read
+    at most Size / 2 of them, so it never touches the slot being overwritten. */
+template <int Size, int Fields>
+struct TelemetryRing
+{
+    static constexpr int size = Size;
+    static constexpr int fields = Fields;
+
+    std::array<std::atomic<float>, static_cast<size_t> (Size * Fields)> data {};
+    std::atomic<uint32_t> written { 0 };
+
+    void push (const std::array<float, static_cast<size_t> (Fields)>& values) noexcept
+    {
+        const auto w = written.load (std::memory_order_relaxed);
+        const auto base = static_cast<size_t> (w % static_cast<uint32_t> (Size)) * static_cast<size_t> (Fields);
+        for (size_t f = 0; f < static_cast<size_t> (Fields); ++f)
+            data[base + f].store (values[f], std::memory_order_relaxed);
+        written.store (w + 1, std::memory_order_release);
+    }
+
+    /** Value of one field of entry number 'entry' (a running count, as returned by 'written'). */
+    float get (uint32_t entry, int field) const noexcept
+    {
+        return data[static_cast<size_t> (entry % static_cast<uint32_t> (Size)) * static_cast<size_t> (Fields) + static_cast<size_t> (field)]
+            .load (std::memory_order_relaxed);
+    }
+};
+
+/** Lock-free values published by the audio thread for the meters and the module displays. */
 struct EngineTelemetry
 {
+    std::atomic<float> sampleRate { 44100.0f };
     std::atomic<float> inputPeak[2] {}, inputRms[2] {};
     std::atomic<float> outputPeak[2] {}, outputRms[2] {};
-    std::atomic<float> noiseLevel { 0.0f };
-    std::atomic<float> wobbleMod { 0.0f };
-    std::atomic<float> distortDrive { 0.0f };
+
+    /** Noise output (mid), per 25 ms window: min, max, mean, rms. */
+    TelemetryRing<256, 4> noiseEnvelope;
+
+    /** Wobble pitch deviation in cents, per 1/64 s window, for L then R: mean of the wow alone, then the lowest and
+        highest deviation including flutter. */
+    TelemetryRing<512, 6> wobblePitch;
+
+    /** Distort: input and output of the non-linear core (after drive), left channel, about 12000 pairs a second. */
+    TelemetryRing<1024, 2> distortTransfer;
+    std::atomic<float> distortBias { 0.0f };
+
     std::atomic<float> digitalRate { 44100.0f };
     std::atomic<float> digitalBits { 24.0f };
-    std::atomic<float> spaceEnergy { 0.0f };
-    std::atomic<float> magneticGain { 1.0f };
-    std::atomic<float> magneticDropout { 0.0f };
+    std::atomic<float> digitalJitter { 0.0f };
 
-    static constexpr int scopeSize = 512;
-    std::array<std::atomic<float>, scopeSize> noiseScope {};
-    std::atomic<int> noiseScopeWrite { 0 };
+    /** Space wet level in dB per 10 ms, the ring entry at the latest input onset, the decay time and pre-delay
+        actually in use (including Flux), and the resonator's level per pitch class. */
+    TelemetryRing<512, 1> spaceWet;
+    std::atomic<uint32_t> spaceOnsetEntry { 0 }, spaceOnsetCount { 0 };
+    std::atomic<float> spaceDecaySeconds { 1.0f }, spacePreDelayMs { 0.0f };
+    std::array<std::atomic<float>, 12> spaceNotes {};
+
+    /** Magnetic tape per 1/64 s window: lowest gain (dB) and highest treble loss (0..1) for L, then for R. */
+    TelemetryRing<256, 4> magneticTape;
 };
 
 } // namespace afterglow::dsp

@@ -59,6 +59,17 @@ float DistortModule::staticCurve (int type, float x, float bias) noexcept
     }
 }
 
+float DistortModule::transformerBassCurve (float x, float bias) noexcept
+{
+    const auto satLow = (std::tanh (2.0f * x + bias) - std::tanh (bias)) * 0.5f;
+    return std::tanh (0.7f * satLow) / 0.7f;
+}
+
+float DistortModule::baseBias (int type) noexcept
+{
+    return type == tube ? 0.08f : (type == fuzz ? 0.25f : (type == tape ? 0.04f : 0.0f));
+}
+
 int DistortModule::latencyForOrder (int order, double, int maxBlockSize)
 {
     if (order <= 0)
@@ -73,6 +84,7 @@ void DistortModule::prepare (double sampleRate, int maxBlockSize)
 {
     fs = sampleRate;
     maxBlock = maxBlockSize;
+    transferStep = std::max (1, static_cast<int> (std::lround (sampleRate / 12000.0)));
 
     for (int order = 1; order <= 3; ++order)
     {
@@ -139,7 +151,7 @@ void DistortModule::reset()
     typeFade.snapTo (1.0f);
     pendingType = -1;
     primed = false;
-    glow = 0.0f;
+    transferCounter = 0;
 }
 
 void DistortModule::setOversamplingOrder (int order) noexcept
@@ -201,7 +213,9 @@ float DistortModule::shape (int type, float x, ShaperState& s, float bias) noexc
             // Push-pull triode pair: soft, mostly odd, with power-supply sag and a little bias imbalance.
             const auto env = s.sag.process (x);
             const auto xs = x / (1.0f + 0.25f * env);
-            return fastTanh (xs + bias) - fastTanh (bias);
+            s.tapIn = x;
+            s.tapOut = fastTanh (xs + bias) - fastTanh (bias);
+            return s.tapOut;
         }
         case transformer:
         {
@@ -209,13 +223,17 @@ float DistortModule::shape (int type, float x, ShaperState& s, float bias) noexc
             const auto low = s.transformerLow.processLP (x);
             const auto high = x - low;
             const auto satLow = (fastTanh (2.0f * low + bias) - fastTanh (bias)) * 0.5f;
-            return fastTanh (0.7f * (high + satLow)) / 0.7f;
+            s.tapIn = x;
+            s.tapOut = fastTanh (0.7f * (high + satLow)) / 0.7f;
+            return s.tapOut;
         }
         case speaker:
         {
             // A torn cone: asymmetric excursion limit, rattle on loud peaks and a narrow, honky response.
             auto v = s.speakerHighPass.processHP (x);
+            s.tapIn = v;
             v = v > 0.0f ? 0.6f * fastTanh (v / 0.6f) : fastTanh (v);
+            s.tapOut = std::clamp (v, -1.2f, 0.9f);
             const auto excess = std::max (0.0f, std::abs (v) - 0.35f);
             v += s.rattleBand.process (s.rng.nextBipolar()) * excess * 1.8f;
             v = s.speakerLowPass.process (s.speakerBell.process (v));
@@ -226,6 +244,8 @@ float DistortModule::shape (int type, float x, ShaperState& s, float bias) noexc
             // Pre-emphasis, soft saturation, de-emphasis: highs compress earlier than lows.
             const auto pre = s.tapePre.process (x);
             const auto sat = softClipKnee (pre + bias) - softClipKnee (bias);
+            s.tapIn = pre;
+            s.tapOut = sat;
             return s.tapeDe.process (sat);
         }
         case fuzz:
@@ -235,14 +255,24 @@ float DistortModule::shape (int type, float x, ShaperState& s, float bias) noexc
             const auto gate = std::clamp ((env - 0.03f) / 0.12f, 0.0f, 1.0f);
             const auto u = x + 0.3f * bias;
             const auto y = u > 0.0f ? fastTanh (3.0f * u) : 0.75f * fastTanh (1.4f * u);
+            s.tapIn = x;
+            s.tapOut = y * (0.25f + 0.75f * gate);
             return s.fuzzLowPass.processLP (y) * (0.25f + 0.75f * gate);
         }
-        case clip:    return kneeClip (x);
-        case fold:    return std::sin (0.5f * pi * (x + bias)) - std::sin (0.5f * pi * bias);
+        case clip:
+            s.tapIn = x;
+            s.tapOut = kneeClip (x);
+            return s.tapOut;
+        case fold:
+            s.tapIn = x;
+            s.tapOut = std::sin (0.5f * pi * (x + bias)) - std::sin (0.5f * pi * bias);
+            return s.tapOut;
         case rectify:
         {
             const auto t = fastTanh (x);
-            return 0.45f * t + 0.9f * std::abs (t);
+            s.tapIn = x;
+            s.tapOut = 0.45f * t + 0.9f * std::abs (t);
+            return s.tapOut;
         }
         default: return x;
     }
@@ -326,7 +356,6 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
             right[i] = dryDelay[1].read (delayRead);
         }
 
-        glow = 0.0f;
         return;
     }
 
@@ -334,7 +363,6 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
     auto* bandR = bandBuffer.getWritePointer (1);
 
     // 1) Isolate the focus band, remember dry and band for the latency-matched recombination, apply drive.
-    auto levelSum = 0.0f;
 
     for (int start = 0; start < n; start += controlInterval)
     {
@@ -358,15 +386,14 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
             const auto drive = lerp (lastDrive, driveTarget, static_cast<float> (i - start + 1) * invLen);
             bandL[i] = mL * drive;
             bandR[i] = mR * drive;
-            levelSum += mL * mL + mR * mR;
         }
 
         lastDrive = driveTarget;
     }
 
     // A slowly drifting bias adds even harmonics, like a warming-up circuit.
-    const auto baseBias = currentType == tube ? 0.08f : (currentType == fuzz ? 0.25f : (currentType == tape ? 0.04f : 0.0f));
-    const auto bias = baseBias + 0.3f * biasFlux.advance (n);
+    const auto bias = baseBias (currentType) + 0.3f * biasFlux.advance (n);
+    lastBias = bias;
 
     // 2) Non-linear stage, oversampled.
     juce::dsp::AudioBlock<float> block (bandBuffer.getArrayOfWritePointers(), 2, static_cast<size_t> (n));
@@ -380,8 +407,13 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
         for (size_t c = 0; c < 2; ++c)
         {
             auto* d = up.getChannelPointer (c);
+            const auto step = transferStep << currentOrder;
             for (size_t i = 0; i < up.getNumSamples(); ++i)
+            {
                 d[i] = shape (type, d[i], shapers[c], bias);
+                if (c == 0)
+                    publishTransfer (step);
+            }
         }
 
         os.processSamplesDown (block);
@@ -392,6 +424,7 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
         {
             bandL[i] = shape (type, bandL[i], shapers[0], bias);
             bandR[i] = shape (type, bandR[i], shapers[1], bias);
+            publishTransfer (transferStep);
         }
     }
 
@@ -431,15 +464,21 @@ void DistortModule::process (float* left, float* right, int n, const DistortPara
             right[i] = dryDelay[1].read (back) + g * (yR - bR);
         }
     }
-
-    const auto rms = std::sqrt (levelSum / static_cast<float> (std::max (1, 2 * n)));
-    glow = engageSm.getCurrent() * clamp01 (driveSm.getCurrent() / maxDriveDb (currentType) * 1.4f)
-         * clamp01 (0.35f + 2.5f * rms);
 }
 
-void DistortModule::publish (EngineTelemetry& telemetry) const noexcept
+void DistortModule::publishTransfer (int step) noexcept
 {
-    telemetry.distortDrive.store (glow, std::memory_order_relaxed);
+    // Display: what the non-linear core received and returned (left channel), about 12000 times a second.
+    if (telemetry != nullptr && ++transferCounter >= step)
+    {
+        transferCounter = 0;
+        telemetry->distortTransfer.push ({ shapers[0].tapIn, shapers[0].tapOut });
+    }
+}
+
+void DistortModule::publish (EngineTelemetry& t) const noexcept
+{
+    t.distortBias.store (lastBias, std::memory_order_relaxed);
 }
 
 } // namespace afterglow::dsp
