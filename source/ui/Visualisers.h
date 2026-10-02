@@ -177,6 +177,8 @@ private:
     std::vector<juce::Point<float>> sweep;
     float nyquistX = -1.0f;
     bool reduced = false;
+    juce::Image sweepImage; // the processed sweep, rendered once per change and scale
+    juce::String sweepImageKey;
 };
 
 /** SPACE: a decay recorder. A faint guide shows the expected decay (pre-delay gap, build-up, then a straight fall

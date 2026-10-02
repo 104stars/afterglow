@@ -23,8 +23,8 @@ early-sampler grit, vintage reverbs and worn-tape artefacts, all brought to life
 * **Presets**: 40 factory presets in 9 categories, user presets, a browser you can tweak while browsing
   (OK keeps, Cancel restores), a startup preset, and undo/redo.
 * **Skeuomorphic interface**: walnut cheeks, enamel faceplates, knurled knobs, illuminated nameplate switches, animated
-  glass displays with live readouts (noise oscilloscope, glowing valves, stepped samples, a reverb echogram and a
-  reel-to-reel transport) and perforated covers for switched-off modules. Resizable from 60 % to 220 %, sharp on high-DPI screens.
+  instrument displays drawn from live engine data (a noise-floor strip, a pitch recorder, a curve tracer, a converter
+  sweep, a decay recorder and a two-tone tape level recorder) and perforated covers for switched-off modules. Resizable from 60 % to 220 %, sharp on high-DPI screens.
 * **Quality**: every module is exactly transparent at 0 %, latency is reported and compensated, and the test suite
   covers null tests, latency, stability fuzzing, presets, calibration and aliasing. See
   [docs/RESEARCH.md](docs/RESEARCH.md) for the full RC-20 analysis, DSP design and measurements.
@@ -36,10 +36,26 @@ early-sampler grit, vintage reverbs and worn-tape artefacts, all brought to life
 | ![Switched-off modules](docs/images/modules-off.jpg) | ![Preset browser](docs/images/preset-browser.jpg) |
 | Switched-off modules sit behind perforated covers; click a cover or a nameplate to enable the module. | The preset browser can be used while audio plays; OK keeps the choice, Cancel restores the previous sound. |
 
-Module displays (each shows a live readout in the corner chip):
+Module displays. Each one is a small instrument that shows what its module is doing to the sound right now:
+
+| Display | What it shows |
+|---|---|
+| Noise | The real noise output scrolling by: crackle as spikes, hiss as a fringed band, hum as a solid band. |
+| Wobble | Pitch deviation in cents: the line is the slow wow, the band around it the flutter; stereo adds a second line. |
+| Distort | A curve tracer: the type's transfer curve, the part of it the signal has reached, and the live signal on it. |
+| Digital | A 20 Hz to 20 kHz test sweep through the real sample rate and bit depth, with the Nyquist point marked. |
+| Space | The expected decay (pre-delay, build-up, 60 dB fall, faster treble decay) with the measured tail after each note. |
+| Magnetic | A 1 kHz and a 10 kHz tone recorded on the worn tape: wear, flutter scallops, dropouts and treble loss. |
 
 ![Displays with tape settings](docs/images/displays-tape.jpg)
-![Displays with a plate reverb](docs/images/displays-plate.jpg)
+![Displays with the Destroyer preset](docs/images/displays-destroyer.jpg)
+
+Close-ups of the displays in different states:
+
+![Noise and Wobble states](docs/images/display-noise-wobble.png)
+![All eight Distort types](docs/images/display-distort-types.png)
+![Digital and Space states](docs/images/display-digital-space.png)
+![Magnetic states](docs/images/display-magnetic.png)
 
 Big knob row with the illuminated nameplate switches, and the master strip:
 

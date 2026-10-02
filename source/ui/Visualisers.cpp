@@ -724,7 +724,7 @@ void DistortDisplay::drawLive (juce::Graphics& g)
     const auto intensity = liveIntensity() * (0.25f + 0.75f * param (ParamIDs::distortMix) * 0.01f);
     const auto& ring = telemetry.distortTransfer;
     const auto written = ring.written.load (std::memory_order_acquire);
-    const auto count = static_cast<int> (std::min<uint32_t> (written, 512));
+    const auto count = static_cast<int> (std::min<uint32_t> (written, 256)); // about 21 ms of the core's history
     if (count < 2 || intensity < 0.004f)
         return;
 
@@ -943,11 +943,28 @@ void DigitalDisplay::drawLive (juce::Graphics& g)
     if (sweep.empty() || intensity < 0.004f)
         return;
 
-    Beam beam;
-    beam.reference = 2.2f;
-    beam.floor = 0.35f;
-    beam.halo = false;
-    drawBeam (g, sweep.data(), static_cast<int> (sweep.size()), phosphor, intensity, beam);
+    // The sweep only changes with the converter settings, so it is rendered once into an image at device resolution
+    // and drawn with the current intensity.
+    const auto imageKey = sweepKey + "@" + juce::String (pixelScale);
+    if (imageKey != sweepImageKey || ! sweepImage.isValid())
+    {
+        sweepImageKey = imageKey;
+        sweepImage = juce::Image (juce::Image::ARGB, static_cast<int> (std::ceil (screenWidth * pixelScale)), static_cast<int> (std::ceil (screenHeight * pixelScale)), true);
+        juce::Graphics ig (sweepImage);
+        ig.addTransform (juce::AffineTransform::scale (pixelScale));
+        Beam beam;
+        beam.reference = 2.2f;
+        beam.floor = 0.35f;
+        beam.halo = false;
+        drawBeam (ig, sweep.data(), static_cast<int> (sweep.size()), phosphor, 1.0f, beam);
+    }
+
+    {
+        juce::Graphics::ScopedSaveState save (g);
+        g.setOpacity (juce::jlimit (0.0f, 1.0f, intensity));
+        g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
+        g.drawImageTransformed (sweepImage, juce::AffineTransform::scale (1.0f / pixelScale));
+    }
 
     // Nyquist: where the sweep passes half the sample rate and aliasing begins, on the frequency scale.
     if (nyquistX > 0.0f)
