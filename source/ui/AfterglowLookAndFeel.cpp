@@ -19,10 +19,12 @@ namespace
     /** Brushed (conical) metal disc, cached per pixel size because it is made of many wedges. */
     juce::Image brushedDiscImage (int pixelDiameter, float brightness)
     {
-        static std::map<std::pair<int, int>, juce::Image> cache;
-        const auto key = std::make_pair (pixelDiameter, juce::roundToInt (brightness * 100.0f));
-        if (auto it = cache.find (key); it != cache.end())
-            return it->second;
+        // Cached in the editors' shared resources (never in a static, see UiResources).
+        auto* resources = UiResources::current();
+        const auto key = "disc/" + juce::String (pixelDiameter) + "/" + juce::String (juce::roundToInt (brightness * 100.0f));
+        if (resources != nullptr)
+            if (auto cached = resources->findImage (key); cached.isValid())
+                return cached;
 
         juce::Image image (juce::Image::ARGB, pixelDiameter, pixelDiameter, true);
         {
@@ -57,9 +59,8 @@ namespace
             g.fillEllipse (0.0f, 0.0f, d, d);
         }
 
-        if (cache.size() > 64)
-            cache.clear();
-        cache[key] = image;
+        if (resources != nullptr)
+            resources->storeImage (key, image);
         return image;
     }
 } // namespace

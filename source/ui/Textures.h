@@ -1,7 +1,6 @@
 #pragma once
 
-#include <juce_gui_basics/juce_gui_basics.h>
-#include <map>
+#include "Theme.h"
 
 namespace afterglow::ui
 {
@@ -19,8 +18,6 @@ namespace Textures
 
     /** Draws a texture that was generated for exactly this area. */
     void drawFitted (juce::Graphics& g, const juce::Image& image, juce::Rectangle<float> area, float opacity = 1.0f);
-
-    void clearCache();
 } // namespace Textures
 
 } // namespace afterglow::ui

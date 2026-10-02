@@ -66,6 +66,9 @@ private:
     void applyScale (float scale);
 
     AfterglowProcessor& processor;
+
+    // Declared first, so it is created before and destroyed after everything that draws with its fonts and images.
+    juce::SharedResourcePointer<ui::UiResources> uiResources;
     ui::AfterglowLookAndFeel lookAndFeel;
     MainPanel content;
     std::unique_ptr<juce::TooltipWindow> tooltips;

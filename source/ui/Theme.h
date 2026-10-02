@@ -96,7 +96,12 @@ namespace Colours
 class Fonts
 {
 public:
-    static Fonts& get();
+    /** The fonts of the open editors (see UiResources). Outside an editor's lifetime this returns plain fallback
+        fonts, so nothing graphical is ever created or kept alive by a static object. */
+    static const Fonts& get();
+
+    /** Loads the embedded typefaces, or creates the empty fallback set (default system font). */
+    explicit Fonts (bool loadEmbedded);
 
     juce::Font label (float height) const;      // Barlow Condensed SemiBold, engraved labels
     juce::Font labelBold (float height) const;  // Barlow Condensed Bold
@@ -105,8 +110,36 @@ public:
     juce::Font script (float height) const;     // Yellowtail, logo
 
 private:
-    Fonts();
     juce::Typeface::Ptr medium, semiBold, bold, mono, scriptFace;
+};
+
+/** Fonts and image caches shared by every open editor of this plugin.
+
+    Each editor holds a juce::SharedResourcePointer to this, so it is created with the first editor and destroyed
+    with the last one. That keeps typefaces and images (which on Windows hold DirectWrite and Direct2D objects, and
+    on macOS CoreText and CoreGraphics ones) strictly inside the time JUCE and the platform graphics are running.
+    They are never destroyed at library unload, when the host removes the plugin or quits, which is where static
+    caches crash. It is only used on the message thread. */
+class UiResources
+{
+public:
+    UiResources();
+    ~UiResources();
+
+    /** The live instance, or nullptr when no editor is open. */
+    static UiResources* current() noexcept;
+
+    const Fonts& getFonts() const noexcept { return fonts; }
+
+    /** A small image cache for generated artwork (textures, knob caps). */
+    juce::Image findImage (const juce::String& key) const;
+    void storeImage (const juce::String& key, const juce::Image& image);
+
+private:
+    Fonts fonts { true };
+    std::map<juce::String, juce::Image> images;
+
+    JUCE_DECLARE_NON_COPYABLE (UiResources)
 };
 
 /** Draws text with a subtle engraved/silkscreened look. */

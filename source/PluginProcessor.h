@@ -9,7 +9,8 @@
 namespace afterglow
 {
 class AfterglowProcessor final : public juce::AudioProcessor,
-                                 private juce::AudioProcessorValueTreeState::Listener
+                                 private juce::AudioProcessorValueTreeState::Listener,
+                                 private juce::AsyncUpdater
 {
 public:
     AfterglowProcessor();
@@ -51,6 +52,7 @@ public:
     void setUiScale (float scale);
 
     static constexpr const char* uiScaleProperty = "uiScale";
+    static constexpr const char* stateType = "AfterglowState"; // root tag of the saved state
 
 private:
     /** Direct pointers to every parameter value, resolved once so the audio thread never searches by name. */
@@ -79,6 +81,8 @@ private:
     };
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
+    void handleAsyncUpdate() override;
+    void applyStateOnMessageThread (const juce::ValueTree& tree);
     void cacheParameterPointers();
     dsp::EngineParams snapshotParameters (const dsp::TransportInfo& transport) const noexcept;
 
@@ -92,6 +96,17 @@ private:
     std::atomic<int> requestedOrder { 2 };
     juce::AudioBuffer<float> monoScratch;
     std::array<dsp::DelayBuffer, 2> bypassDelay;
+
+    // Audio passes through untouched until prepareToPlay has sized everything (some hosts process first).
+    std::atomic<bool> prepared { false };
+
+    // Work that must happen on the message thread, requested from wherever the host called us.
+    std::atomic<bool> latencyChangePending { false };
+    juce::CriticalSection pendingStateLock;
+    juce::ValueTree pendingState; // a session restored on another thread, waiting for the message thread
+
+    // Kept outside the parameter tree, so the editor never writes to the tree while the host saves it.
+    std::atomic<float> uiScale { 1.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AfterglowProcessor)
 };

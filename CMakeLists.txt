@@ -134,6 +134,18 @@ if(AFTERGLOW_BUILD_TESTS)
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags)
     add_test(NAME AfterglowTests COMMAND AfterglowTests)
+
+    # Creates and destroys instances and editors the way hosts do, across JUCE shutdowns (needs a display).
+    juce_add_console_app(AfterglowLifecycleTest PRODUCT_NAME "AfterglowLifecycleTest")
+    target_sources(AfterglowLifecycleTest PRIVATE tests/LifecycleMain.cpp)
+    target_compile_definitions(AfterglowLifecycleTest PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_link_libraries(AfterglowLifecycleTest
+        PRIVATE
+            Afterglow
+            AfterglowBinaryData
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
+    add_test(NAME AfterglowLifecycleTest COMMAND AfterglowLifecycleTest)
 endif()
 
 if(AFTERGLOW_BUILD_TOOLS)

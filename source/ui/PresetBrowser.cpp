@@ -81,22 +81,30 @@ PresetBrowser::PresetBrowser (PresetManager& p) : presets (p)
         if (idx < 0 || presets.getPresets()[static_cast<size_t> (idx)].isFactory)
             return;
 
-        auto* window = new juce::AlertWindow ("Rename preset", "Enter a new name:", juce::MessageBoxIconType::NoIcon, this);
-        window->setLookAndFeel (&getLookAndFeel());
-        window->addTextEditor ("name", presets.getPresets()[static_cast<size_t> (idx)].name);
-        window->addButton ("RENAME", 1, juce::KeyPress (juce::KeyPress::returnKey));
-        window->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        // A child of the browser (not a desktop window), owned by it, with the editor's look-and-feel inherited.
+        renameWindow = std::make_unique<juce::AlertWindow> ("Rename preset", "Enter a new name:", juce::MessageBoxIconType::NoIcon);
+        renameWindow->addTextEditor ("name", presets.getPresets()[static_cast<size_t> (idx)].name);
+        renameWindow->addButton ("RENAME", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        renameWindow->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        addAndMakeVisible (*renameWindow);
+        renameWindow->setCentrePosition (getLocalBounds().getCentre());
+
         juce::Component::SafePointer<PresetBrowser> safe (this);
-        window->enterModalState (true, juce::ModalCallbackFunction::create ([safe, window, idx] (int result)
+        renameWindow->enterModalState (true, juce::ModalCallbackFunction::create ([safe, idx] (int result)
         {
-            std::unique_ptr<juce::AlertWindow> owner (window);
-            if (safe == nullptr || result != 1)
+            if (safe == nullptr || safe->renameWindow == nullptr)
+                return;
+
+            const auto newName = safe->renameWindow->getTextEditorContents ("name");
+            safe->renameWindow.reset();
+            if (result != 1)
                 return;
 
             juce::String error;
-            if (! safe->presets.renameUserPreset (idx, window->getTextEditorContents ("name"), error) && error.isNotEmpty())
-                juce::AlertWindow::showAsync (juce::MessageBoxOptions().withTitle ("Rename failed").withMessage (error).withButton ("OK"), nullptr);
-
+            if (! safe->presets.renameUserPreset (idx, newName, error) && error.isNotEmpty())
+                safe->messageBox = juce::AlertWindow::showScopedAsync (juce::MessageBoxOptions().withTitle ("Rename failed").withMessage (error)
+                                                                           .withButton ("OK").withAssociatedComponent (safe.getComponent()),
+                                                                       nullptr);
             safe->rebuildList();
         }), false);
     };
@@ -109,20 +117,20 @@ PresetBrowser::PresetBrowser (PresetManager& p) : presets (p)
 
         juce::Component::SafePointer<PresetBrowser> safe (this);
         const auto name = presets.getPresets()[static_cast<size_t> (idx)].name;
-        juce::AlertWindow::showAsync (juce::MessageBoxOptions()
-                                          .withTitle ("Delete preset")
-                                          .withMessage ("Delete \"" + name + "\"? This cannot be undone.")
-                                          .withButton ("DELETE")
-                                          .withButton ("CANCEL")
-                                          .withAssociatedComponent (this),
-                                      [safe, idx] (int result)
-                                      {
-                                          if (safe != nullptr && result == 1)
-                                          {
-                                              safe->presets.deleteUserPreset (idx);
-                                              safe->rebuildList();
-                                          }
-                                      });
+        messageBox = juce::AlertWindow::showScopedAsync (juce::MessageBoxOptions()
+                                                             .withTitle ("Delete preset")
+                                                             .withMessage ("Delete \"" + name + "\"? This cannot be undone.")
+                                                             .withButton ("DELETE")
+                                                             .withButton ("CANCEL")
+                                                             .withAssociatedComponent (this),
+                                                         [safe, idx] (int result)
+                                                         {
+                                                             if (safe != nullptr && result == 1)
+                                                             {
+                                                                 safe->presets.deleteUserPreset (idx);
+                                                                 safe->rebuildList();
+                                                             }
+                                                         });
     };
 
     setWantsKeyboardFocus (true);
